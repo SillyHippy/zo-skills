@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+ <meta charset="UTF-8">
+ <title>Field Sheet - {case_number}</title>
+ <style>
+ @page {{ size: letter; margin: 0.3in; }}
+ body {{ font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; color: #000; margin: 0; padding: 0; }}
+ .page {{ width: 100%; height: 100%; }}
+ .header {{ display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 3px; margin-bottom: 3px; }}
+ .company-title {{ font-size: 18px; font-weight: 800; text-transform: uppercase; }}
+ .section-title {{ background-color: #eee; font-weight: bold; font-size: 10px; padding: 2px 5px; margin-top: 4px; margin-bottom: 2px; border-top: 1px solid #000; border-bottom: 1px solid #000; text-transform: uppercase; -webkit-print-color-adjust: exact; }}
+ .grid-2 {{ display: flex; gap: 20px; }}
+ .grid-2 > div {{ flex: 1; }}
+ .grid-4 {{ display: flex; gap: 10px; }}
+ .grid-4 > div {{ flex: 1; }}
+ .field-group {{ margin-bottom: 2px; }}
+ .field-group label {{ font-weight: bold; font-size: 9px; color: #444; display: block; margin-bottom: 0; text-transform: uppercase; }}
+ .field-value {{ width: 100%; border-bottom: 1px solid #ccc; padding: 1px 4px; font-size: 11px; font-family: inherit; min-height: 16px; }}
+ .highlight-box .field-value {{ font-weight: bold; font-size: 13px; border: 2px solid #333; background-color: #f4f4f4; padding: 2px 4px; }}
+ .service-area {{ border: 1px solid #000; padding: 4px 8px; margin-top: 5px; }}
+ .service-header {{ text-align: center; font-weight: bold; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #ccc; padding-bottom: 2px; margin-bottom: 4px; }}
+ .attempts-table {{ width: 100%; border-collapse: collapse; margin-bottom: 4px; }}
+ .attempts-table th {{ text-align: left; font-weight: bold; font-size: 10px; padding: 2px 4px; border-bottom: 2px solid #000; }}
+ .attempts-table td {{ padding: 0; border-bottom: 1px solid #000; height: 20px; }}
+ .attempt-date {{ background-color: #f0f0f0; width: 30%; -webkit-print-color-adjust: exact; }}
+ </style>
+</head>
+<body>
+ <div class="page">
+  <div class="header">
+   <div>
+    <div class="company-title">Just Legal Solutions</div>
+    <div style="font-size: 11px; margin-top: 2px;">
+     <strong>Email:</strong> Info@JustLegalSolutions.org &nbsp;
+     <strong>Phone:</strong> (539) 367-6832
+    </div>
+   </div>
+   <div style="text-align: right;">
+    <div class="field-group">
+     <label>Court</label>
+     <div class="field-value" style="text-align: right; width: 280px;">{court}</div>
+    </div>
+   </div>
+  </div>
+
+  <div class="section-title">Case Information</div>
+  <div class="grid-2">
+   <div>
+    <div class="field-group"><label>Case Number</label><div class="field-value">{case_number}</div></div>
+    <div class="field-group"><label>Plaintiff/Petitioner</label><div class="field-value">{plaintiff}</div></div>
+   </div>
+   <div>
+    <div class="field-group"><label>Court</label><div class="field-value">{court}</div></div>
+    <div class="field-group"><label>Defendant/Respondent</label><div class="field-value">{defendant}</div></div>
+   </div>
+  </div>
+
+  <div class="field-group" style="margin-top: 2px;">
+   <label>Documents to Serve</label>
+   <div class="field-value">{documents}</div>
+  </div>
+  <div class="field-group">
+   <label>Special Instructions</label>
+   <div class="field-value" style="min-height: 16px;">{special_instructions}</div>
+  </div>
+
+  <div class="section-title">Job Details</div>
+  <div class="grid-4">
+   <div class="field-group"><label>Job #</label><div class="field-value">AUTO-{date_str}</div></div>
+   <div class="field-group"><label>Server</label><div class="field-value">Joseph Iannazzi</div></div>
+   <div class="field-group"><label>Due Date</label><div class="field-value"></div></div>
+   <div class="field-group"><label>Fee</label><div class="field-value"></div></div>
+  </div>
+
+  <div class="field-group highlight-box" style="margin-top: 4px;">
+   <label>Party to Serve</label>
+   <div class="field-value">{recipient_name}</div>
+  </div>
+
+  <div class="section-title">Service Locations</div>
+  <div class="field-group">
+   <label>Address 1 (Home/Last Known)</label>
+   <div class="field-value">{address}</div>
+  </div>
+
+  <div class="service-area">
+   <div class="service-header">Field Notes &amp; Service Declaration</div>
+   <table class="attempts-table">
+    <thead><tr><th style="width:30%;">Date &amp; Time:</th><th>Description of Service / Recipient:</th></tr></thead>
+    <tbody>
+     <tr><td class="attempt-date"></td><td></td></tr><tr><td colspan="2" style="height:20px;"></td></tr>
+     <tr><td class="attempt-date"></td><td></td></tr><tr><td colspan="2" style="height:20px;"></td></tr>
+     <tr><td class="attempt-date"></td><td></td></tr><tr><td colspan="2" style="height:20px;"></td></tr>
+     <tr><td class="attempt-date"></td><td></td></tr><tr><td colspan="2" style="height:20px;"></td></tr>
+     <tr><td class="attempt-date"></td><td></td></tr><tr><td colspan="2" style="height:20px;"></td></tr>
+     <tr><td class="attempt-date"></td><td></td></tr><tr><td colspan="2" style="height:20px;"></td></tr>
+    </tbody>
+   </table>
+   <div class="field-group" style="margin-top: 2px;">
+    <label>Notes / Comments</label>
+    <div style="border: 1px dashed #999; width: 100%; height: 100px; padding: 5px; box-sizing: border-box;"></div>
+   </div>
+  </div>
+ </div>
+</body>
+</html>

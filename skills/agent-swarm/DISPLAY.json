@@ -1,0 +1,26 @@
+{
+  "name": "Agent Swarm",
+  "description": "Parallel multi-agent orchestration mimicking Kimi K2.6 Agent Swarm — decompose complex tasks, spawn up to 300 specialized sub-agents via Zo API, and synthesize results. Model-agnostic, no external frameworks required.",
+  "icon": "🐝",
+  "category": "automation",
+  "tags": ["agents", "parallel", "orchestration", "research", "swarm"],
+  "version": "2.0.0",
+  "author": "sillyhippy.zo.computer",
+  "actions": [
+    {
+      "label": "Research Swarm",
+      "description": "Decompose a research task and spawn parallel researcher agents",
+      "command": "python Skills/agent-swarm/scripts/swarm.py --task \"${input}\" --agent-types researcher,analyst,writer --verbose"
+    },
+    {
+      "label": "Full Swarm",
+      "description": "Full swarm with all agent types (researcher, coder, writer, analyst, tester)",
+      "command": "python Skills/agent-swarm/scripts/swarm.py --task \"${input}\" --agent-types researcher,coder,writer,analyst,tester --verbose"
+    },
+    {
+      "label": "Dry Run",
+      "description": "Decompose task without executing — see the plan first",
+      "command": "python Skills/agent-swarm/scripts/swarm.py --task \"${input}\" --dry-run --verbose"
+    }
+  ]
+}

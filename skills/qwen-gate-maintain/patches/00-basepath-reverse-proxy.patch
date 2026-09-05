@@ -1,0 +1,32 @@
+diff --git a/src/routes/dashboard/dashboardRoutes.ts b/src/routes/dashboard/dashboardRoutes.ts
+index 2dd9521..af14f06 100644
+--- a/src/routes/dashboard/dashboardRoutes.ts
++++ b/src/routes/dashboard/dashboardRoutes.ts
+@@ -23,12 +23,26 @@ const serveHtml = (html: string) => (c: any) => {
+   // API_KEY protection applies only to data endpoints (handled by requireApiKey/bearerAuth).
+   // The front-end JS injects Authorization: Bearer <key> via window.API_KEY for data fetches.
+   const darkMode = config.get('DARK_MODE') === 'true';
+-  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\nwindow.DARK_MODE = ${JSON.stringify(darkMode)};\n</script>\n`;
++  // Detect reverse proxy prefix from X-Forwarded-Prefix header
++  const forwardedPrefix = (c.req.header('x-forwarded-prefix') || '').replace(/\\/$/, '');
++  const basePath = forwardedPrefix;
++  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\nwindow.DARK_MODE = ${JSON.stringify(darkMode)};\nwindow.BASE_PATH = ${JSON.stringify(basePath)};\n</script>\n`;
+   // Apply dark-mode class on <html> server-side to prevent flash on page navigation
+   let output = html.replace(/(<script\\b)/, scriptInjection + '$1');
+   if (darkMode) {
+     output = output.replace('<html lang=\"en\">', '<html lang=\"en\" class=\"dark-mode\">');
+   }
++  // Rewrite absolute paths for reverse proxy compatibility
++  if (basePath) {
++    // Single-pass rewrite: only prefix root-relative URLs that have not
++    // already been rewritten. We use a replacer function that inspects the
++    // captured URL and skips any value that already starts with basePath.
++    const rewrite = (attr: string, url: string) => {
++      if (url.startsWith(basePath + '/')) return `${attr}${url}`;
++      return `${attr}${basePath}${url}`;
++    };
++    output = output.replace(/(href="|src=")(\/[^"]*)/g, (_, attr, url) => rewrite(attr, url));
++  }
+   c.header(
+     'Content-Security-Policy',
+     "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;",

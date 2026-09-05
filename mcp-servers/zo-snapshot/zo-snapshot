@@ -1,0 +1,651 @@
+#!/usr/bin/env python3
+"""
+zo-snapshot: Standalone Snapshot, Diff, and Rollback Engine for Zo Computer & AI Agents.
+Works standalone via CLI, Local REST API, and native MCP JSON-RPC.
+Zero external dependencies (Python 3.12 stdlib only).
+"""
+
+import os
+import sys
+import json
+import time
+import shutil
+import sqlite3
+import hashlib
+import difflib
+import argparse
+import subprocess
+from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+from datetime import datetime
+
+SNAPSHOT_ROOT = Path("/root/.zo_snapshots")
+SNAPSHOT_DATA = SNAPSHOT_ROOT / "data"
+DB_PATH = SNAPSHOT_ROOT / "snapshots.db"
+
+DEFAULT_EXCLUDES = {
+    "node_modules", ".git", ".cache", "__pycache__", ".venv", "venv",
+    ".npm", ".pnpm-store", "dist", "build", ".next", ".turbo",
+    "*.pyc", "*.tmp", "*.log", ".zo_snapshots"
+}
+
+SCOPE_PATHS = {
+    "config": [
+        "/root/.hermes/config.yaml",
+        "/root/.hermes/skills",
+        "/root/.hermes/cron",
+        "/etc/zo/supervisord-user.conf",
+        "/etc/zo/supervisor.conf",
+        "/root/.zo_secrets"
+    ],
+    "workspace": [
+        "/home/workspace"
+    ],
+    "hermes": [
+        "/root/.hermes"
+    ],
+    "all": [
+        "/root/.hermes",
+        "/etc/zo/supervisord-user.conf",
+        "/etc/zo/supervisor.conf",
+        "/root/.zo_secrets",
+        "/home/workspace"
+    ]
+}
+
+def init_db():
+    SNAPSHOT_ROOT.mkdir(parents=True, exist_ok=True)
+    SNAPSHOT_DATA.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH))
+    with conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS snapshots (
+                id TEXT PRIMARY KEY,
+                label TEXT,
+                scope TEXT,
+                created_at TIMESTAMP,
+                file_count INTEGER,
+                total_bytes INTEGER,
+                metadata_json TEXT
+            )
+        """)
+    return conn
+
+def get_db():
+    return sqlite3.connect(str(DB_PATH))
+
+def should_exclude(path_obj: Path) -> bool:
+    parts = path_obj.parts
+    for part in parts:
+        if part in DEFAULT_EXCLUDES:
+            return True
+        for excl in DEFAULT_EXCLUDES:
+            if excl.startswith("*.") and part.endswith(excl[1:]):
+                return True
+    return False
+
+def hash_file(filepath: Path) -> str:
+    try:
+        h = hashlib.sha256()
+        with open(filepath, 'rb') as f:
+            while chunk := f.read(65536):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+def create_snapshot(label: str = "", scope: str = "config", custom_paths: list = None) -> dict:
+    init_db()
+    ts = datetime.now()
+    snap_id = f"snap_{ts.strftime('%Y%m%d_%H%M%S')}_{os.urandom(3).hex()}"
+    snap_dir = SNAPSHOT_DATA / snap_id
+    snap_dir.mkdir(parents=True, exist_ok=True)
+
+    targets = custom_paths if custom_paths else SCOPE_PATHS.get(scope, SCOPE_PATHS["config"])
+    manifest = {
+        "id": snap_id,
+        "label": label or f"Snapshot {ts.strftime('%Y-%m-%d %H:%M:%S')}",
+        "scope": scope,
+        "created_at": ts.isoformat(),
+        "files": {}
+    }
+
+    file_count = 0
+    total_bytes = 0
+
+    for target_str in targets:
+        target_path = Path(target_str)
+        if not target_path.exists():
+            continue
+
+        if target_path.is_file():
+            rel_path = target_path.relative_to("/")
+            dest = snap_dir / rel_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(target_path, dest)
+            except OSError:
+                shutil.copy2(target_path, dest)
+            
+            st = target_path.stat()
+            file_count += 1
+            total_bytes += st.st_size
+            manifest["files"][str(target_path)] = {
+                "size": st.st_size,
+                "mtime": st.st_mtime,
+                "sha256": hash_file(target_path),
+                "mode": oct(st.st_mode)
+            }
+        elif target_path.is_dir():
+            for root, dirs, files in os.walk(target_path):
+                # Filter out excluded directories in-place
+                dirs[:] = [d for d in dirs if not should_exclude(Path(root) / d)]
+                
+                for f in files:
+                    src_file = Path(root) / f
+                    if should_exclude(src_file) or src_file.is_symlink():
+                        continue
+                    
+                    try:
+                        rel_path = src_file.relative_to("/")
+                        dest = snap_dir / rel_path
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            os.link(src_file, dest)
+                        except OSError:
+                            shutil.copy2(src_file, dest)
+                        
+                        st = src_file.stat()
+                        file_count += 1
+                        total_bytes += st.st_size
+                        manifest["files"][str(src_file)] = {
+                            "size": st.st_size,
+                            "mtime": st.st_mtime,
+                            "sha256": hash_file(src_file),
+                            "mode": oct(st.st_mode)
+                        }
+                    except Exception as e:
+                        pass
+
+    # Save manifest
+    with open(snap_dir / "manifest.json", "w") as mf:
+        json.dump(manifest, mf, indent=2)
+
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO snapshots (id, label, scope, created_at, file_count, total_bytes, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (snap_id, manifest["label"], scope, ts.isoformat(), file_count, total_bytes, json.dumps(manifest)))
+
+    return {
+        "id": snap_id,
+        "label": manifest["label"],
+        "scope": scope,
+        "created_at": ts.isoformat(),
+        "file_count": file_count,
+        "total_bytes": total_bytes
+    }
+
+def list_snapshots() -> list:
+    init_db()
+    with get_db() as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("SELECT id, label, scope, created_at, file_count, total_bytes FROM snapshots ORDER BY created_at DESC")
+        rows = [dict(r) for r in cur.fetchall()]
+    return rows
+
+def get_snapshot(snap_id: str) -> dict:
+    init_db()
+    with get_db() as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("SELECT * FROM snapshots WHERE id = ?", (snap_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        if res.get("metadata_json"):
+            res["manifest"] = json.loads(res["metadata_json"])
+        return res
+
+def delete_snapshot(snap_id: str) -> bool:
+    init_db()
+    snap_dir = SNAPSHOT_DATA / snap_id
+    if snap_dir.exists():
+        shutil.rmtree(snap_dir, ignore_errors=True)
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM snapshots WHERE id = ?", (snap_id,))
+        return cur.rowcount > 0
+
+def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: int = 500) -> dict:
+    s1 = get_snapshot(snap_id_1)
+    if not s1:
+        return {"error": f"Snapshot {snap_id_1} not found"}
+    
+    m1 = s1.get("manifest", {}).get("files", {})
+    snap_dir_1 = SNAPSHOT_DATA / snap_id_1
+
+    m2 = {}
+    snap_dir_2 = None
+    is_live_current = (snap_id_2 in ("current", "live", "", None))
+
+    if not is_live_current:
+        s2 = get_snapshot(snap_id_2)
+        if not s2:
+            return {"error": f"Snapshot {snap_id_2} not found"}
+        m2 = s2.get("manifest", {}).get("files", {})
+        snap_dir_2 = SNAPSHOT_DATA / snap_id_2
+    else:
+        # Build live manifest for files tracked in snapshot 1
+        for fpath_str in m1.keys():
+            p = Path(fpath_str)
+            if p.exists() and p.is_file():
+                st = p.stat()
+                m2[fpath_str] = {
+                    "size": st.st_size,
+                    "mtime": st.st_mtime,
+                    "sha256": hash_file(p),
+                    "mode": oct(st.st_mode)
+                }
+
+    all_files = sorted(set(list(m1.keys()) + list(m2.keys())))
+    added = []
+    deleted = []
+    modified = []
+    unchanged = []
+    diffs = {}
+
+    for fpath in all_files:
+        in_1 = fpath in m1
+        in_2 = fpath in m2
+
+        if not in_1 and in_2:
+            added.append(fpath)
+        elif in_1 and not in_2:
+            deleted.append(fpath)
+        else:
+            # In both
+            if m1[fpath]["sha256"] != m2[fpath]["sha256"]:
+                modified.append(fpath)
+                # Compute diff
+                f1_disk = snap_dir_1 / Path(fpath).relative_to("/")
+                if is_live_current:
+                    f2_disk = Path(fpath)
+                else:
+                    f2_disk = snap_dir_2 / Path(fpath).relative_to("/")
+
+                try:
+                    t1 = f1_disk.read_text(errors="replace").splitlines(keepends=True)
+                    t2 = f2_disk.read_text(errors="replace").splitlines(keepends=True)
+                    udiff = list(difflib.unified_diff(
+                        t1, t2,
+                        fromfile=f"a/{fpath} ({snap_id_1})",
+                        tofile=f"b/{fpath} ({'live' if is_live_current else snap_id_2})",
+                        n=3
+                    ))
+                    if udiff:
+                        diffs[fpath] = "".join(udiff[:max_diff_lines])
+                except Exception as ex:
+                    diffs[fpath] = f"[Binary or unreadable file diff error: {ex}]"
+            else:
+                unchanged.append(fpath)
+
+    return {
+        "from": snap_id_1,
+        "to": "current_live" if is_live_current else snap_id_2,
+        "summary": {
+            "added_count": len(added),
+            "modified_count": len(modified),
+            "deleted_count": len(deleted),
+            "unchanged_count": len(unchanged)
+        },
+        "added": added,
+        "modified": modified,
+        "deleted": deleted,
+        "diffs": diffs
+    }
+
+def restore_snapshot(snap_id: str, dry_run: bool = False, target_file: str = None) -> dict:
+    s = get_snapshot(snap_id)
+    if not s:
+        return {"error": f"Snapshot {snap_id} not found"}
+
+    snap_dir = SNAPSHOT_DATA / snap_id
+    files = s.get("manifest", {}).get("files", {})
+    
+    # Auto-checkpoint before actual restore if not dry run
+    safety_id = None
+    if not dry_run:
+        safety_snap = create_snapshot(label=f"Auto-safety before restore of {snap_id}", scope=s.get("scope", "config"))
+        safety_id = safety_snap["id"]
+
+    actions = []
+    for fpath_str, meta in files.items():
+        if target_file and fpath_str != target_file and not fpath_str.startswith(target_file):
+            continue
+
+        src_disk = snap_dir / Path(fpath_str).relative_to("/")
+        dest_path = Path(fpath_str)
+
+        if not src_disk.exists():
+            continue
+
+        action = "overwrite" if dest_path.exists() else "create"
+        actions.append({"file": fpath_str, "action": action, "size": meta.get("size", 0)})
+
+        if not dry_run:
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_disk, dest_path)
+
+    return {
+        "restored_from": snap_id,
+        "dry_run": dry_run,
+        "safety_snapshot_id": safety_id,
+        "restored_count": len(actions),
+        "actions": actions
+    }
+
+# ================= HTTP / MCP Server =================
+
+class SnapshotHandler(BaseHTTPRequestHandler):
+    def send_json(self, data, status=200):
+        body = json.dumps(data, indent=2).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.end_headers()
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+
+        if parsed.path in ("/api/snapshots", "/snapshots"):
+            self.send_json(list_snapshots())
+        elif parsed.path.startswith("/api/snapshots/diff"):
+            from_id = qs.get("from", [""])[0]
+            to_id = qs.get("to", ["current"])[0]
+            if not from_id:
+                self.send_json({"error": "Missing 'from' parameter"}, 400)
+            else:
+                self.send_json(diff_snapshots(from_id, to_id))
+        elif parsed.path.startswith("/api/snapshots/"):
+            snap_id = parsed.path.replace("/api/snapshots/", "").strip("/")
+            snap = get_snapshot(snap_id)
+            if snap:
+                self.send_json(snap)
+            else:
+                self.send_json({"error": "Not found"}, 404)
+        elif parsed.path == "/health":
+            self.send_json({"status": "ok", "service": "zo-snapshot", "version": "1.0.0"})
+        else:
+            self.send_json({"error": "Not Found"}, 404)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
+
+        if parsed.path in ("/api/snapshots", "/snapshots"):
+            label = body.get("label", "")
+            scope = body.get("scope", "config")
+            custom_paths = body.get("paths", None)
+            res = create_snapshot(label=label, scope=scope, custom_paths=custom_paths)
+            self.send_json(res, 201)
+        elif parsed.path in ("/api/snapshots/restore", "/restore"):
+            snap_id = body.get("id")
+            dry_run = body.get("dry_run", False)
+            target_file = body.get("target_file", None)
+            if not snap_id:
+                self.send_json({"error": "Missing 'id'"}, 400)
+            else:
+                self.send_json(restore_snapshot(snap_id, dry_run=dry_run, target_file=target_file))
+        elif parsed.path in ("/mcp", "/mcp/"):
+            # MCP JSON-RPC 2.0 Handler
+            self.handle_mcp(body)
+        else:
+            self.send_json({"error": "Not Found"}, 404)
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/snapshots/"):
+            snap_id = parsed.path.replace("/api/snapshots/", "").strip("/")
+            ok = delete_snapshot(snap_id)
+            self.send_json({"success": ok, "id": snap_id})
+        else:
+            self.send_json({"error": "Not Found"}, 404)
+
+    def handle_mcp(self, body):
+        method = body.get("method")
+        msg_id = body.get("id", 1)
+
+        if method == "tools/list":
+            tools = [
+                {
+                    "name": "snapshot_list",
+                    "description": "List all workspace and configuration snapshots with timestamps and labels.",
+                    "inputSchema": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "snapshot_create",
+                    "description": "Create a new snapshot of configuration or workspace files before updates.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string", "description": "Human-readable label"},
+                            "scope": {"type": "string", "enum": ["config", "workspace", "hermes", "all"], "default": "config"}
+                        }
+                    }
+                },
+                {
+                    "name": "snapshot_diff",
+                    "description": "Compare two snapshots or compare a snapshot against current live state.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "from_id": {"type": "string", "description": "Source snapshot ID"},
+                            "to_id": {"type": "string", "description": "Target snapshot ID (or 'current')", "default": "current"}
+                        },
+                        "required": ["from_id"]
+                    }
+                },
+                {
+                    "name": "snapshot_restore",
+                    "description": "Restore files from a snapshot back to the live system with auto-safety checkpoint.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "Snapshot ID to restore"},
+                            "dry_run": {"type": "boolean", "default": False}
+                        },
+                        "required": ["id"]
+                    }
+                }
+            ]
+            self.send_json({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": tools}})
+        elif method == "tools/call":
+            params = body.get("params", {})
+            tool_name = params.get("name")
+            args = params.get("arguments", {})
+
+            if tool_name == "snapshot_list":
+                res = list_snapshots()
+            elif tool_name == "snapshot_create":
+                res = create_snapshot(label=args.get("label", ""), scope=args.get("scope", "config"))
+            elif tool_name == "snapshot_diff":
+                res = diff_snapshots(args.get("from_id"), args.get("to_id", "current"))
+            elif tool_name == "snapshot_restore":
+                res = restore_snapshot(args.get("id"), dry_run=args.get("dry_run", False))
+            else:
+                res = {"error": f"Unknown tool {tool_name}"}
+
+            self.send_json({
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "content": [{"type": "text", "text": json.dumps(res, indent=2)}]
+                }
+            })
+        else:
+            self.send_json({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": "Method not found"}})
+
+    def log_message(self, format, *args):
+        # Quiet logs
+        pass
+
+def run_server(port: int = 3090):
+    init_db()
+    server = HTTPServer(("127.0.0.1", port), SnapshotHandler)
+    print(f"zo-snapshot daemon running on http://127.0.0.1:{port} (REST + MCP at /mcp)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopping zo-snapshot server.")
+
+# ================= CLI Entrypoint =================
+
+def main():
+    parser = argparse.ArgumentParser(description="zo-snapshot: Standalone Snapshot & Diff Engine for Zo Computer")
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # create
+    p_create = subparsers.add_parser("create", help="Create a snapshot")
+    p_create.add_argument("label", nargs="?", default="", help="Snapshot label")
+    p_create.add_argument("--scope", default="config", choices=["config", "workspace", "hermes", "all"], help="Scope to snapshot")
+    p_create.add_argument("--json", action="store_true", help="Output JSON")
+
+    # list
+    p_list = subparsers.add_parser("list", help="List snapshots")
+    p_list.add_argument("--json", action="store_true", help="Output JSON")
+
+    # diff
+    p_diff = subparsers.add_parser("diff", help="Diff snapshot against live or another snapshot")
+    p_diff.add_argument("from_id", help="Source snapshot ID")
+    p_diff.add_argument("to_id", nargs="?", default="current", help="Target snapshot ID (default: current live)")
+    p_diff.add_argument("--json", action="store_true", help="Output JSON")
+    p_diff.add_argument("--stat", action="store_true", help="Show summary statistics only")
+
+    # restore
+    p_restore = subparsers.add_parser("restore", help="Restore a snapshot")
+    p_restore.add_argument("id", help="Snapshot ID to restore")
+    p_restore.add_argument("--dry-run", action="store_true", help="Simulate restore without touching files")
+    p_restore.add_argument("--json", action="store_true", help="Output JSON")
+
+    # info
+    p_info = subparsers.add_parser("info", help="Get snapshot info")
+    p_info.add_argument("id", help="Snapshot ID")
+    p_info.add_argument("--json", action="store_true", help="Output JSON")
+
+    # delete
+    p_del = subparsers.add_parser("delete", help="Delete a snapshot")
+    p_del.add_argument("id", help="Snapshot ID")
+
+    # serve
+    p_serve = subparsers.add_parser("serve", help="Run HTTP / MCP server")
+    p_serve.add_argument("--port", type=int, default=3090, help="Port to listen on")
+
+    args = parser.parse_args()
+
+    if not args.command or args.command == "list":
+        snaps = list_snapshots()
+        if getattr(args, "json", False):
+            print(json.dumps(snaps, indent=2))
+        else:
+            if not snaps:
+                print("No snapshots found. Run `zo-snapshot create [label]` to take one.")
+            else:
+                print(f"{'ID':<32} {'CREATED':<20} {'SCOPE':<10} {'FILES':<8} {'LABEL'}")
+                print("-" * 90)
+                for s in snaps:
+                    dt = s["created_at"].split(".")[0].replace("T", " ")
+                    print(f"{s['id']:<32} {dt:<20} {s['scope']:<10} {s['file_count']:<8} {s['label']}")
+
+    elif args.command == "create":
+        res = create_snapshot(label=args.label, scope=args.scope)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"✓ Snapshot created: {res['id']}")
+            print(f"  Label: {res['label']}")
+            print(f"  Scope: {res['scope']} ({res['file_count']} files, {res['total_bytes'] / 1024:.1f} KB)")
+
+    elif args.command == "diff":
+        res = diff_snapshots(args.from_id, args.to_id)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            if "error" in res:
+                print(f"Error: {res['error']}")
+                sys.exit(1)
+            summary = res["summary"]
+            print(f"Comparing: {res['from']} ➔ {res['to']}")
+            print(f"Summary: +{summary['added_count']} added, ~{summary['modified_count']} modified, -{summary['deleted_count']} deleted, {summary['unchanged_count']} unchanged")
+            print()
+            if res["added"]:
+                print("Added files:")
+                for f in res["added"]:
+                    print(f"  + {f}")
+            if res["deleted"]:
+                print("Deleted files:")
+                for f in res["deleted"]:
+                    print(f"  - {f}")
+            if res["modified"]:
+                print("Modified files:")
+                for f in res["modified"]:
+                    print(f"  ~ {f}")
+            
+            if not args.stat and res["diffs"]:
+                print("\n" + "=" * 60 + " UNIFIED DIFFS " + "=" * 60)
+                for fpath, d in res["diffs"].items():
+                    print(f"\n--- {fpath} ---")
+                    print(d)
+
+    elif args.command == "restore":
+        res = restore_snapshot(args.id, dry_run=args.dry_run)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            if "error" in res:
+                print(f"Error: {res['error']}")
+                sys.exit(1)
+            prefix = "[DRY-RUN] " if res["dry_run"] else ""
+            print(f"{prefix}Restored {res['restored_count']} files from {res['restored_from']}")
+            if res.get("safety_snapshot_id"):
+                print(f"Safety snapshot created: {res['safety_snapshot_id']}")
+            for act in res["actions"]:
+                print(f"  [{act['action']}] {act['file']}")
+
+    elif args.command == "info":
+        snap = get_snapshot(args.id)
+        if not snap:
+            print(f"Snapshot {args.id} not found.")
+            sys.exit(1)
+        if args.json:
+            print(json.dumps(snap, indent=2))
+        else:
+            print(f"Snapshot ID: {snap['id']}")
+            print(f"Label:       {snap['label']}")
+            print(f"Scope:       {snap['scope']}")
+            print(f"Created At:  {snap['created_at']}")
+            print(f"Files:       {snap['file_count']}")
+            print(f"Total Size:  {snap['total_bytes'] / 1024:.2f} KB")
+
+    elif args.command == "delete":
+        ok = delete_snapshot(args.id)
+        print(f"Deleted snapshot {args.id}" if ok else f"Snapshot {args.id} not found.")
+
+    elif args.command == "serve":
+        run_server(args.port)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,4 @@
+name: omni
+version: "1.0.0"
+description: "Idiot-proof OmniRoute reverse-proxy update/verify slash commands (/omni update)."
+author: "@sillyhippy"

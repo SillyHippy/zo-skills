@@ -1,0 +1,24 @@
+{
+  "setupComplete": true,
+  "platform": "Zo Computer",
+  "prerequisites": {
+    "agentBrowser": {
+      "required": true,
+      "installed": true,
+      "path": "/usr/local/bin/agent-browser",
+      "description": "agent-browser CLI (auto-detects Chrome, falls back to Edge)"
+    },
+    "llmKeys": {
+      "required": false,
+      "configured": true,
+      "description": "No LLM API key needed — agent-browser uses built-in browser automation, not AI-driven navigation. Available keys in /home/workspace/credentials/.env: Groq (5), Cerebras (6), Gemini (4) — usable by other skills that need LLM inference."
+    }
+  },
+  "setupInstructions": [
+    "agent-browser is pre-installed at /usr/local/bin/agent-browser",
+    "No API key required for basic browser automation",
+    "For LLM-driven navigation tasks, set GROQ_API_KEY_1, CEREBRAS_API_KEY_1, or GEMINI_API_KEY_1 as needed",
+    "Test: agent-browser open https://example.com && agent-browser snapshot -i -c"
+  ],
+  "verifySetup": "Run 'agent-browser open https://example.com' then 'agent-browser snapshot -i -c' to verify"
+}

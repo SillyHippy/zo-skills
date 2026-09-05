@@ -1,0 +1,78 @@
+diff --git a/src/routes/chat.ts b/src/routes/chat.ts
+index 97f1281..9373c03 100644
+--- a/src/routes/chat.ts
++++ b/src/routes/chat.ts
+@@ -194,8 +194,24 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
+     // Upload a single context file: system instructions + tool results + older chat history
+     // Merging cuts upload overhead in half (one STS token, one OSS upload, one parse poll)
+     if (accountEmail && (systemContent || toolResultsContent || chatHistoryContent)) {
++      // ── Size cap ──
++      // Qwen's free web API silently returns empty content when the
++      // attached file is too large. Prioritize tool results
++      // (turn-relevant) and recent chat history, then trim
++      // system-instructions to fit.
++      const MAX_CONTEXT_FILE_CHARS = 30000;
++      const toolLen = toolResultsContent ? toolResultsContent.length : 0;
++      const historyLen = chatHistoryContent ? chatHistoryContent.length : 0;
++      const reserved = toolLen + historyLen;
++      const systemBudget = Math.max(0, MAX_CONTEXT_FILE_CHARS - reserved - 200);
++      const trimmedSystem =
++        systemContent && systemContent.length > systemBudget
++          ? systemContent.slice(0, Math.max(0, systemBudget - 40)) +
++            '\n…[system-instructions truncated to fit Qwen file limit]'
++          : systemContent;
++
+       const parts: string[] = [];
+-      if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
++      if (trimmedSystem) parts.push(`<system-instructions>\n${trimmedSystem}\n</system-instructions>`);
+       if (toolResultsContent) parts.push(`<tool-results>\n${toolResultsContent}\n</tool-results>`);
+       if (chatHistoryContent) parts.push(`<chat_history>\n${chatHistoryContent}\n</chat_history>`);
+       const combinedContent = parts.join('\n\n');
+diff --git a/src/routes/chatHelpers.ts b/src/routes/chatHelpers.ts
+index 5d9f6c7..d2f8888 100644
+--- a/src/routes/chatHelpers.ts
++++ b/src/routes/chatHelpers.ts
+@@ -169,18 +169,33 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
+   const featureConfig = buildFeatureConfig(true);
+ 
+   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
+-    const localMcp: Record<string, any> = {};
+-    localMcp['★'] = {};
+     const toolNames: string[] = [];
+-    for (const t of body.tools) {
+-      const fn = t.function || {};
+-      localMcp['★'][fn.name] = {
+-        description: fn.description || '',
+-        input_schema: fn.parameters || { type: 'object', properties: {} },
+-      };
+-      toolNames.push(`${fn.name}${fn.description ? ` (${fn.description})` : ''}`);
++
++    // ── local_mcp payload guard ──
++    // Qwen's free web API silently returns empty content when the
++    // total payload exceeds ~50KB. With 150+ tools from Hermes the
++    // local_mcp blob (full input_schema per tool) hits 170KB+.
++    // When TOOL_CALLING=false we omit local_mcp and rely on the
++    // textual tool list below — the model still emits tool calls
++    // via Qwen's XML-ish format.
++    if (_toolCalling) {
++      const localMcp: Record<string, any> = {};
++      localMcp['★'] = {};
++      for (const t of body.tools) {
++        const fn = t.function || {};
++        localMcp['★'][fn.name] = {
++          description: fn.description || '',
++          input_schema: fn.parameters || { type: 'object', properties: {} },
++        };
++        toolNames.push(`${fn.name}${fn.description ? ` (${fn.description})` : ''}`);
++      }
++      featureConfig.local_mcp = localMcp;
++    } else {
++      for (const t of body.tools) {
++        const fn = t.function || {};
++        toolNames.push(fn.name);
++      }
+     }
+-    featureConfig.local_mcp = localMcp;
+     // ponytail: tool schema in system prompt as textual fallback for models
+     // that don't honor feature_config.local_mcp consistently
+     const toolDescriptions = body.tools
