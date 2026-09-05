@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-zo-snapshot: Verified Snapshot, Diff, and Atomic Rollback Engine for Zo Computer & AI Agents.
-Pure Python 3.12 stdlib. Implements true immutable storage, atomic file replacement,
-live scope re-scanning for additions, and full MCP lifecycle.
+zo-snapshot v3.1: Fast Content-Addressable (CAS) + Stat-Cached Full VPS Snapshot Engine.
+- Live files are NEVER hardlinked (live in-place edits never mutate snapshots).
+- Snapshot files link to immutable objects in the CAS pool (/root/.zo_snapshots/objects/).
+- Mtime + Size stat-caching avoids re-reading/re-hashing untouched files in huge projects.
+- Atomic restore via staged temporary files and os.replace.
+- Full GitHub-compliant unified diffs (including added /dev/null and deleted /dev/null hunks).
 """
 
 import os
@@ -15,7 +18,6 @@ import sqlite3
 import hashlib
 import difflib
 import argparse
-import tempfile
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -23,6 +25,7 @@ from datetime import datetime
 
 SNAPSHOT_ROOT = Path("/root/.zo_snapshots")
 SNAPSHOT_DATA = SNAPSHOT_ROOT / "data"
+SNAPSHOT_OBJECTS = SNAPSHOT_ROOT / "objects"
 DB_PATH = SNAPSHOT_ROOT / "snapshots.db"
 
 ID_REGEX = re.compile(r"^snap_[0-9]{8}_[0-9]{6}_[a-f0-9]{6,12}$")
@@ -30,10 +33,21 @@ ID_REGEX = re.compile(r"^snap_[0-9]{8}_[0-9]{6}_[a-f0-9]{6,12}$")
 DEFAULT_EXCLUDES = {
     "node_modules", ".git", ".cache", "__pycache__", ".venv", "venv",
     ".npm", ".pnpm-store", "dist", "build", ".next", ".turbo",
-    ".zo_snapshots"
+    ".zo_snapshots", ".tmp_rst"
 }
 
+FULL_VPS_ROOTS = [
+    "/home/workspace",
+    "/root",
+    "/etc/zo",
+    "/tmp"
+]
+
 SCOPE_PATHS = {
+    "vps": FULL_VPS_ROOTS,
+    "all": FULL_VPS_ROOTS,
+    "workspace": ["/home/workspace"],
+    "root": ["/root"],
     "config": [
         "/root/.hermes/config.yaml",
         "/root/.hermes/skills",
@@ -42,25 +56,13 @@ SCOPE_PATHS = {
         "/etc/zo/supervisor.conf",
         "/root/.zo_secrets"
     ],
-    "workspace": [
-        "/home/workspace"
-    ],
-    "hermes": [
-        "/root/.hermes"
-    ],
-    "all": [
-        "/root/.hermes",
-        "/etc/zo/supervisord-user.conf",
-        "/etc/zo/supervisor.conf",
-        "/root/.zo_secrets",
-        "/home/workspace"
-    ]
+    "hermes": ["/root/.hermes"]
 }
 
 def init_db(root_path: Path = SNAPSHOT_ROOT):
     root_path.mkdir(parents=True, exist_ok=True)
-    data_dir = root_path / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
+    (root_path / "data").mkdir(parents=True, exist_ok=True)
+    (root_path / "objects").mkdir(parents=True, exist_ok=True)
     db_file = root_path / "snapshots.db"
     conn = sqlite3.connect(str(db_file))
     with conn:
@@ -73,6 +75,14 @@ def init_db(root_path: Path = SNAPSHOT_ROOT):
                 file_count INTEGER,
                 total_bytes INTEGER,
                 metadata_json TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS file_cache (
+                path TEXT PRIMARY KEY,
+                size INTEGER,
+                mtime REAL,
+                sha256 TEXT
             )
         """)
     return conn
@@ -88,19 +98,41 @@ def should_exclude(path_obj: Path) -> bool:
     for part in parts:
         if part in DEFAULT_EXCLUDES:
             return True
-        if part.endswith(".pyc") or part.endswith(".tmp") or part.endswith(".log"):
+        if part.startswith(".tmp_rst_"):
+            return True
+        if part.endswith(".pyc") or part.endswith(".sock"):
             return True
     return False
 
 def hash_file(filepath: Path) -> str:
     h = hashlib.sha256()
     with open(filepath, 'rb') as f:
-        while chunk := f.read(65536):
+        while chunk := f.read(131072):
             h.update(chunk)
     return h.hexdigest()
 
+def get_or_calc_hash(filepath: Path, st, cache_map: dict) -> str:
+    fkey = str(filepath)
+    cached = cache_map.get(fkey)
+    if cached and cached["size"] == st.st_size and abs(cached["mtime"] - st.st_mtime) < 0.0001:
+        return cached["sha256"]
+    sha = hash_file(filepath)
+    cache_map[fkey] = {"size": st.st_size, "mtime": st.st_mtime, "sha256": sha}
+    return sha
+
+def store_cas_object(src_file: Path, sha: str, root_path: Path = SNAPSHOT_ROOT) -> Path:
+    obj_dir = (root_path / "objects") / sha[:2]
+    obj_dir.mkdir(parents=True, exist_ok=True)
+    obj_file = obj_dir / sha[2:]
+    
+    if not obj_file.exists():
+        tmp_obj = obj_dir / f".tmp_{os.getpid()}_{sha[2:]}"
+        shutil.copy2(src_file, tmp_obj)
+        os.chmod(tmp_obj, 0o444)
+        os.replace(tmp_obj, obj_file)
+    return obj_file
+
 def scan_live_files(roots: list) -> tuple[dict, list]:
-    """Scan roots and return {path_str: stat_and_hash} and any scan_errors."""
     files_map = {}
     errors = []
     
@@ -143,17 +175,21 @@ def scan_live_files(roots: list) -> tuple[dict, list]:
                         errors.append({"path": str(src_file), "error": str(e)})
     return files_map, errors
 
-def create_snapshot(label: str = "", scope: str = "config", custom_paths: list = None, root_path: Path = SNAPSHOT_ROOT) -> dict:
+def create_snapshot(label: str = "", scope: str = "vps", custom_paths: list = None, root_path: Path = SNAPSHOT_ROOT) -> dict:
     init_db(root_path)
     ts = datetime.now()
     snap_id = f"snap_{ts.strftime('%Y%m%d_%H%M%S')}_{os.urandom(4).hex()}"
     snap_dir = (root_path / "data") / snap_id
     temp_dir = (root_path / "data") / f".tmp_{snap_id}"
     
-    targets = [str(Path(p).resolve()) for p in (custom_paths if custom_paths else SCOPE_PATHS.get(scope, SCOPE_PATHS["config"]))]
-    
+    targets = [str(Path(p).resolve()) for p in (custom_paths if custom_paths else SCOPE_PATHS.get(scope, FULL_VPS_ROOTS))]
     temp_dir.mkdir(parents=True, exist_ok=True)
     
+    cache_map = {}
+    with get_db(root_path) as conn:
+        for r in conn.execute("SELECT path, size, mtime, sha256 FROM file_cache").fetchall():
+            cache_map[r[0]] = {"size": r[1], "mtime": r[2], "sha256": r[3]}
+
     manifest = {
         "id": snap_id,
         "label": label or f"Snapshot {ts.strftime('%Y-%m-%d %H:%M:%S')}",
@@ -177,23 +213,21 @@ def create_snapshot(label: str = "", scope: str = "config", custom_paths: list =
                 if should_exclude(target_path) or target_path.is_symlink():
                     continue
                 try:
+                    st = target_path.stat()
+                    sha = get_or_calc_hash(target_path, st, cache_map)
+                    obj_file = store_cas_object(target_path, sha, root_path)
+                    
                     rel_path = target_path.relative_to("/")
                     dest = temp_dir / rel_path
                     dest.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    # Independent full copy - NEVER link mutable live file
-                    shutil.copy2(target_path, dest)
-                    
-                    # Verify stored copy hash
-                    saved_sha = hash_file(dest)
-                    st = dest.stat()
+                    os.link(obj_file, dest)
                     
                     file_count += 1
                     total_bytes += st.st_size
                     manifest["files"][str(target_path)] = {
                         "size": st.st_size,
                         "mtime": st.st_mtime,
-                        "sha256": saved_sha,
+                        "sha256": sha,
                         "mode": oct(st.st_mode)
                     }
                 except Exception as e:
@@ -209,33 +243,29 @@ def create_snapshot(label: str = "", scope: str = "config", custom_paths: list =
                             continue
                         
                         try:
+                            st = src_file.stat()
+                            sha = get_or_calc_hash(src_file, st, cache_map)
+                            obj_file = store_cas_object(src_file, sha, root_path)
+                            
                             rel_path = src_file.relative_to("/")
                             dest = temp_dir / rel_path
                             dest.parent.mkdir(parents=True, exist_ok=True)
-                            
-                            # Independent full copy
-                            shutil.copy2(src_file, dest)
-                            
-                            # Verify stored copy hash
-                            saved_sha = hash_file(dest)
-                            st = dest.stat()
+                            os.link(obj_file, dest)
                             
                             file_count += 1
                             total_bytes += st.st_size
                             manifest["files"][str(src_file)] = {
                                 "size": st.st_size,
                                 "mtime": st.st_mtime,
-                                "sha256": saved_sha,
+                                "sha256": sha,
                                 "mode": oct(st.st_mode)
                             }
                         except Exception as e:
                             manifest["warnings"].append({"path": str(src_file), "error": str(e)})
 
-        # Save manifest inside the snapshot
         with open(temp_dir / "manifest.json", "w") as mf:
             json.dump(manifest, mf, indent=2)
 
-        # Atomic promote
         temp_dir.rename(snap_dir)
 
         with get_db(root_path) as conn:
@@ -243,6 +273,11 @@ def create_snapshot(label: str = "", scope: str = "config", custom_paths: list =
                 INSERT INTO snapshots (id, label, scope, created_at, file_count, total_bytes, metadata_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (snap_id, manifest["label"], manifest["scope"], ts.isoformat(), file_count, total_bytes, json.dumps(manifest)))
+            
+            cache_rows = [(p, v["size"], v["mtime"], v["sha256"]) for p, v in cache_map.items()]
+            conn.executemany("""
+                INSERT OR REPLACE INTO file_cache (path, size, mtime, sha256) VALUES (?, ?, ?, ?)
+            """, cache_rows)
 
         return {
             "id": snap_id,
@@ -313,7 +348,7 @@ def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: i
     
     manifest1 = s1.get("manifest", {})
     m1 = manifest1.get("files", {})
-    roots1 = manifest1.get("roots", SCOPE_PATHS.get(s1.get("scope"), SCOPE_PATHS["config"]))
+    roots1 = manifest1.get("roots", SCOPE_PATHS.get(s1.get("scope"), FULL_VPS_ROOTS))
     snap_dir_1 = (root_path / "data") / snap_id_1
 
     m2 = {}
@@ -342,27 +377,62 @@ def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: i
     for fpath in all_files:
         in_1 = fpath in m1
         in_2 = fpath in m2
+        clean_path = fpath.lstrip("/")
 
         if not in_1 and in_2:
+            # Brand new added file: diff against /dev/null
             added.append(fpath)
+            if is_live_current:
+                f2_disk = Path(fpath)
+            else:
+                f2_disk = snap_dir_2 / Path(clean_path)
+            try:
+                t2 = f2_disk.read_text(errors="replace").splitlines(keepends=True)
+                udiff = list(difflib.unified_diff(
+                    [], t2,
+                    fromfile="/dev/null",
+                    tofile=f"b/{clean_path}",
+                    n=3
+                ))
+                if udiff:
+                    diffs[fpath] = "".join(udiff[:max_diff_lines])
+            except Exception as ex:
+                diffs[fpath] = f"[Binary or unreadable file: {ex}]"
+
         elif in_1 and not in_2:
+            # Deleted file: diff from snapshot to /dev/null
             deleted.append(fpath)
+            f1_disk = snap_dir_1 / Path(clean_path)
+            try:
+                t1 = f1_disk.read_text(errors="replace").splitlines(keepends=True)
+                udiff = list(difflib.unified_diff(
+                    t1, [],
+                    fromfile=f"a/{clean_path}",
+                    tofile="/dev/null",
+                    n=3
+                ))
+                if udiff:
+                    diffs[fpath] = "".join(udiff[:max_diff_lines])
+            except Exception as ex:
+                diffs[fpath] = f"[Binary or unreadable file: {ex}]"
+
         else:
+            # In both: check if modified
             if m1[fpath]["sha256"] != m2[fpath]["sha256"]:
                 modified.append(fpath)
-                f1_disk = snap_dir_1 / Path(fpath).relative_to("/")
+                f1_disk = snap_dir_1 / Path(clean_path)
                 if is_live_current:
                     f2_disk = Path(fpath)
                 else:
-                    f2_disk = snap_dir_2 / Path(fpath).relative_to("/")
+                    f2_disk = snap_dir_2 / Path(clean_path)
 
                 try:
                     t1 = f1_disk.read_text(errors="replace").splitlines(keepends=True)
                     t2 = f2_disk.read_text(errors="replace").splitlines(keepends=True)
                     udiff = list(difflib.unified_diff(
                         t1, t2,
-                        fromfile=f"a/{fpath} ({snap_id_1})",
-                        tofile=f"b/{fpath} ({'live' if is_live_current else snap_id_2})",
+                        fromfile=f"a/{clean_path}",
+                        tofile=f"b/{clean_path}",
                         n=3
                     ))
                     if udiff:
@@ -398,8 +468,9 @@ def restore_snapshot(snap_id: str, dry_run: bool = False, target_file: str = Non
     snap_dir = (root_path / "data") / snap_id
     manifest = s.get("manifest", {})
     files = manifest.get("files", {})
-    roots = manifest.get("roots", SCOPE_PATHS.get(s.get("scope"), SCOPE_PATHS["config"]))
+    roots = manifest.get("roots", SCOPE_PATHS.get(s.get("scope"), FULL_VPS_ROOTS))
     
+    # 1. Full pre-flight SHA256 integrity check over stored files
     integrity_errors = []
     for fpath_str, meta in files.items():
         src_disk = snap_dir / Path(fpath_str).relative_to("/")
@@ -411,6 +482,7 @@ def restore_snapshot(snap_id: str, dry_run: bool = False, target_file: str = Non
     if integrity_errors:
         return {"error": "Snapshot integrity check failed", "details": integrity_errors}
 
+    # 2. Automatic safety checkpoint of live files before touching anything
     safety_id = None
     if not dry_run:
         safety_snap = create_snapshot(
@@ -437,8 +509,10 @@ def restore_snapshot(snap_id: str, dry_run: bool = False, target_file: str = Non
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             temp_target = dest_path.with_name(f".tmp_rst_{os.getpid()}_{dest_path.name}")
             shutil.copy2(src_disk, temp_target)
+            os.chmod(temp_target, int(meta.get("mode", "0o644"), 8))
             staged_transfers.append((temp_target, dest_path))
 
+    # Apply staged replacements atomically
     if not dry_run:
         for temp_target, dest_path in staged_transfers:
             os.replace(temp_target, dest_path)
@@ -450,6 +524,8 @@ def restore_snapshot(snap_id: str, dry_run: bool = False, target_file: str = Non
         "restored_count": len(actions),
         "actions": actions
     }
+
+# ================= HTTP / MCP Server =================
 
 class SnapshotHandler(BaseHTTPRequestHandler):
     root_path = SNAPSHOT_ROOT
@@ -493,7 +569,7 @@ class SnapshotHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json({"error": "Not found"}, 404)
         elif parsed.path == "/health":
-            self.send_json({"status": "ok", "service": "zo-snapshot", "version": "2.0.0"})
+            self.send_json({"status": "ok", "service": "zo-snapshot", "version": "3.1.0"})
         else:
             self.send_json({"error": "Not Found"}, 404)
 
@@ -504,7 +580,7 @@ class SnapshotHandler(BaseHTTPRequestHandler):
 
         if parsed.path in ("/api/snapshots", "/snapshots"):
             label = body.get("label", "")
-            scope = body.get("scope", "config")
+            scope = body.get("scope", "vps")
             custom_paths = body.get("paths", None)
             res = create_snapshot(label=label, scope=scope, custom_paths=custom_paths, root_path=self.root_path)
             self.send_json(res, 201)
@@ -540,7 +616,7 @@ class SnapshotHandler(BaseHTTPRequestHandler):
                 "id": msg_id,
                 "result": {
                     "protocolVersion": "2024-11-05",
-                    "serverInfo": {"name": "zo-snapshot", "version": "2.0.0"},
+                    "serverInfo": {"name": "zo-snapshot", "version": "3.1.0"},
                     "capabilities": {"tools": {}}
                 }
             })
@@ -550,17 +626,17 @@ class SnapshotHandler(BaseHTTPRequestHandler):
             tools = [
                 {
                     "name": "snapshot_list",
-                    "description": "List all workspace and configuration snapshots with timestamps and labels.",
+                    "description": "List all workspace, system, and configuration snapshots with timestamps and labels.",
                     "inputSchema": {"type": "object", "properties": {}}
                 },
                 {
                     "name": "snapshot_create",
-                    "description": "Create a new snapshot of configuration or workspace files before updates.",
+                    "description": "Create a full VPS snapshot (workspace, root, etc, tmp) or custom scope.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "label": {"type": "string", "description": "Human-readable label"},
-                            "scope": {"type": "string", "enum": ["config", "workspace", "hermes", "all", "custom"], "default": "config"},
+                            "scope": {"type": "string", "enum": ["vps", "all", "workspace", "root", "config", "hermes", "custom"], "default": "vps"},
                             "paths": {"type": "array", "items": {"type": "string"}, "description": "Custom paths list"}
                         }
                     }
@@ -599,7 +675,7 @@ class SnapshotHandler(BaseHTTPRequestHandler):
             if tool_name == "snapshot_list":
                 res = list_snapshots(self.root_path)
             elif tool_name == "snapshot_create":
-                res = create_snapshot(label=args.get("label", ""), scope=args.get("scope", "config"), custom_paths=args.get("paths"), root_path=self.root_path)
+                res = create_snapshot(label=args.get("label", ""), scope=args.get("scope", "vps"), custom_paths=args.get("paths"), root_path=self.root_path)
             elif tool_name == "snapshot_diff":
                 res = diff_snapshots(args.get("from_id"), args.get("to_id", "current"), root_path=self.root_path)
             elif tool_name == "snapshot_restore":
@@ -624,19 +700,19 @@ def run_server(port: int = 3090, root_path: Path = SNAPSHOT_ROOT):
     init_db(root_path)
     SnapshotHandler.root_path = root_path
     server = HTTPServer(("127.0.0.1", port), SnapshotHandler)
-    print(f"zo-snapshot v2.0 running on http://127.0.0.1:{port} (MCP at /mcp)")
+    print(f"zo-snapshot v3.1 running on http://127.0.0.1:{port} (MCP at /mcp)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
 
 def main():
-    parser = argparse.ArgumentParser(description="zo-snapshot: Verified Snapshot & Diff Engine for Zo Computer")
+    parser = argparse.ArgumentParser(description="zo-snapshot: Full-VPS Snapshot & Diff Engine for Zo Computer")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     p_create = subparsers.add_parser("create", help="Create a snapshot")
     p_create.add_argument("label", nargs="?", default="", help="Snapshot label")
-    p_create.add_argument("--scope", default="config", choices=["config", "workspace", "hermes", "all", "custom"], help="Scope to snapshot")
+    p_create.add_argument("--scope", default="vps", choices=["vps", "all", "workspace", "root", "config", "hermes", "custom"], help="Scope to snapshot (default: vps = full VPS)")
     p_create.add_argument("--paths", nargs="+", help="Specific custom paths to snapshot")
     p_create.add_argument("--json", action="store_true", help="Output JSON")
 
