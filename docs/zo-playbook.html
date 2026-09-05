@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Zo Computer Playbook — Verified Workarounds & Hardening</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #070b12;
+      --surface: #0e1524;
+      --surface-card: #141f35;
+      --surface-hover: #1c2b48;
+      --border: #1e2c45;
+      --border-subtle: #141f33;
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.12);
+      --text: #cbd5e1;
+      --text-bright: #ffffff;
+      --text-muted: #8493a8;
+      --code-bg: #04060a;
+      --code-border: #17243a;
+      --success: #10b981;
+      --success-bg: rgba(16, 185, 129, 0.12);
+      --warning: #f59e0b;
+      --warning-bg: rgba(245, 158, 11, 0.12);
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Top Navbar */
+    .top-nav {
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.75rem 1.2rem;
+      background: rgba(14, 21, 36, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 800;
+      font-size: 1rem;
+      color: var(--text-bright);
+      text-decoration: none;
+    }
+    .brand-pill {
+      background: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      padding: 0.15rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    /* Hero */
+    .hero {
+      padding: 2.5rem 1.2rem 2rem;
+      text-align: center;
+      background: radial-gradient(circle at 50% 0%, rgba(56, 189, 248, 0.1) 0%, transparent 80%);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .hero-badge {
+      display: inline-block;
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      padding: 0.25rem 0.8rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-bottom: 0.9rem;
+    }
+    .hero h1 {
+      font-size: clamp(1.7rem, 6vw, 2.5rem);
+      font-weight: 800;
+      color: var(--text-bright);
+      letter-spacing: -0.5px;
+      line-height: 1.25;
+      margin-bottom: 0.75rem;
+    }
+    .hero p {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      max-width: 680px;
+      margin: 0 auto;
+      line-height: 1.55;
+    }
+
+    /* Main Container */
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 1.5rem 1rem 4rem;
+    }
+
+    /* Table of Contents */
+    .toc-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 1.2rem;
+      margin-bottom: 2rem;
+    }
+    .toc-card h2 {
+      font-size: 1.1rem;
+      color: var(--text-bright);
+      margin-bottom: 0.9rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .toc-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .toc-link {
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
+      padding: 0.65rem 0.85rem;
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.88rem;
+      font-weight: 600;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+      line-height: 1.35;
+      transition: all 0.15s ease;
+    }
+    .toc-link .num {
+      color: var(--accent);
+      font-size: 0.75rem;
+      font-weight: 800;
+      background: var(--accent-glow);
+      padding: 0.12rem 0.42rem;
+      border-radius: 4px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .toc-link .text {
+      flex: 1;
+    }
+    .toc-link:hover, .toc-link:active {
+      background: var(--surface-hover);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* Section Cards */
+    .section-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 1.4rem 1.15rem;
+      margin-bottom: 2.2rem;
+      scroll-margin-top: 4.5rem;
+    }
+    .section-header {
+      padding-bottom: 0.9rem;
+      border-bottom: 1px solid var(--border-subtle);
+      margin-bottom: 1.1rem;
+    }
+    .section-title {
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: var(--text-bright);
+      line-height: 1.35;
+      margin-bottom: 0.4rem;
+    }
+    .badge-tag {
+      display: inline-block;
+      background: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      padding: 0.15rem 0.55rem;
+      border-radius: 4px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    /* Problem and Micro-steps Boxes */
+    .problem-box {
+      background: var(--warning-bg);
+      border-left: 3px solid var(--warning);
+      padding: 0.85rem 1rem;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      margin-bottom: 1.2rem;
+      font-size: 0.9rem;
+      color: #fed7aa;
+      line-height: 1.5;
+    }
+    .problem-box strong { color: #fb923c; }
+
+    .micro-steps {
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1rem 1.1rem;
+      margin-bottom: 1.2rem;
+    }
+    .micro-steps-title {
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--text-bright);
+      margin-bottom: 0.65rem;
+    }
+    .micro-steps ol {
+      padding-left: 1.2rem;
+      color: var(--text);
+    }
+    .micro-steps li {
+      margin-bottom: 0.5rem;
+      font-size: 0.88rem;
+      line-height: 1.45;
+    }
+
+    /* Prompt / Code Box */
+    .prompt-box-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #111a2c;
+      border: 1px solid var(--code-border);
+      border-bottom: none;
+      padding: 0.55rem 0.85rem;
+      border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    }
+    .prompt-box-header .title {
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #38bdf8;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-right: 0.5rem;
+    }
+    .code-container {
+      position: relative;
+      margin-bottom: 1.3rem;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--code-border);
+      border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+      padding: 1rem 0.9rem;
+      overflow-x: auto;
+      font-family: 'JetBrains Mono', Consolas, monospace;
+      font-size: 0.82rem;
+      color: #e2e8f0;
+      line-height: 1.5;
+      -webkit-overflow-scrolling: touch;
+    }
+    pre.standalone {
+      border-radius: var(--radius-sm);
+    }
+    .btn-copy {
+      background: #1e293b;
+      color: #cbd5e1;
+      border: 1px solid var(--border);
+      padding: 0.3rem 0.65rem;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: all 0.15s ease;
+    }
+    .btn-copy:hover { background: #334155; color: #fff; }
+    .btn-copy.copied {
+      background: #059669;
+      color: #fff;
+      border-color: #10b981;
+    }
+
+    /* Callout styling */
+    .callout {
+      border-radius: var(--radius-sm);
+      padding: 0.85rem 1rem;
+      margin: 1.1rem 0;
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+    .callout-info {
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      color: #bae6fd;
+    }
+    .callout-success {
+      background: var(--success-bg);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      color: #a7f3d0;
+    }
+    .callout strong { color: #fff; }
+
+    code { font-family: 'JetBrains Mono', monospace; }
+    p code, li code {
+      background: rgba(56, 189, 248, 0.12);
+      color: #38bdf8;
+      padding: 0.12rem 0.35rem;
+      border-radius: 4px;
+      font-size: 0.86em;
+      word-break: break-word;
+    }
+
+    /* Clean Suggestions Note */
+    .feedback-note {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 1.5rem;
+      text-align: center;
+      margin-top: 3rem;
+    }
+    .feedback-note h3 {
+      font-size: 1.15rem;
+      color: var(--text-bright);
+      font-weight: 700;
+      margin-bottom: 0.4rem;
+    }
+    .feedback-note p {
+      font-size: 0.92rem;
+      color: var(--text-muted);
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    footer {
+      text-align: center;
+      padding: 2.5rem 1rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border-subtle);
+      font-size: 0.85rem;
+    }
+
+    /* Desktop Enhancements */
+    @media (min-width: 768px) {
+      .top-nav { padding: 0.85rem 2rem; }
+      .hero { padding: 3.5rem 1.5rem 2.8rem; }
+      .container { padding: 2.5rem 1.5rem 5rem; }
+      .section-card { padding: 2.2rem; margin-bottom: 2.8rem; }
+      .toc-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.75rem;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Sticky Navbar -->
+  <header class="top-nav">
+    <a href="#" class="brand">
+      <span>Zo Playbook</span>
+      <span class="brand-pill">Guide</span>
+    </a>
+  </header>
+
+  <!-- Hero Section -->
+  <div class="hero">
+    <div class="hero-badge">Modal / gVisor Environment &bull; Zero External VPS Needed</div>
+    <h1>The Zo Computer Playbook</h1>
+    <p>Battle-tested, step-by-step guides for fixing gVisor limits, Docker sandboxing, MCP OAuth persistence, disk snapshot reboots, and crawler-friendly Cloudflare WAF setups.</p>
+  </div>
+
+  <div class="container">
+
+    <!-- Table of Contents -->
+    <div class="toc-card">
+      <h2>Table of Contents</h2>
+      <div class="toc-grid">
+        <a href="#section-1" class="toc-link">
+          <span class="num">01</span>
+          <span class="text">60-Min Limit & UI Desyncs</span>
+        </a>
+        <a href="#section-2" class="toc-link">
+          <span class="num">02</span>
+          <span class="text">Nightly Reboots & MCP OAuth</span>
+        </a>
+        <a href="#section-3" class="toc-link">
+          <span class="num">03</span>
+          <span class="text">Subagent Swarms & Fan-Out</span>
+        </a>
+        <a href="#section-4" class="toc-link">
+          <span class="num">04</span>
+          <span class="text">Docker Alternative & Client Sandboxes</span>
+        </a>
+        <a href="#section-5" class="toc-link">
+          <span class="num">05</span>
+          <span class="text">Codex Bubblewrap (bwrap) Fix</span>
+        </a>
+        <a href="#section-6" class="toc-link">
+          <span class="num">06</span>
+          <span class="text">Shutting Off Native Supermemory</span>
+        </a>
+        <a href="#section-7" class="toc-link">
+          <span class="num">07</span>
+          <span class="text">Write Churn & Mid-Turn Reboots</span>
+        </a>
+        <a href="#section-8" class="toc-link">
+          <span class="num">08</span>
+          <span class="text">Cloudflare WAF, Tunnels & AI Crawlers</span>
+        </a>
+        <a href="#section-9" class="toc-link">
+          <span class="num">09</span>
+          <span class="text">Zo Browser Gaps & Localhost Access</span>
+        </a>
+        <a href="#section-extras" class="toc-link">
+          <span class="num">10</span>
+          <span class="text">nproc lies — check real CPU/RAM</span>
+        </a>
+      </div>
+    </div>
+
+    <!-- Section 1 -->
+    <section class="section-card" id="section-1">
+      <div class="section-header">
+        <div class="section-title">1. The 60-Minute Response Limit & UI Sync Bugs</div>
+        <div class="badge-tag">Stability</div>
+      </div>
+      <div class="problem-box">
+        <strong>The Problem:</strong> Zo's web chat UI uses an active websocket connection. When a task takes longer than an hour, the browser connection drops or the UI stays stuck on "running" even though the script on the VPS finished 30 minutes ago.
+      </div>
+      <div class="micro-steps">
+        <div class="micro-steps-title">Exact Sequential Execution Pattern:</div>
+        <ol>
+          <li>Stop running long coding or scraping commands directly in the live chat reply box.</li>
+          <li>Tell Zo to write the task into a standalone script.</li>
+          <li>Tell Zo to launch that script detached in the background using <code>nohup</code>.</li>
+          <li>Tell Zo to pipe the live output into a log file at <code>/tmp/task_run.log</code>.</li>
+          <li>Tell Zo to print the background process ID (PID) and exit immediately.</li>
+          <li>Whenever you want an update, ask Zo to read the last 30 lines of that log file.</li>
+        </ol>
+      </div>
+
+      <div class="prompt-box-header">
+        <span class="title">Copy prompt to launch background job:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Prompt</button>
+      </div>
+      <div class="code-container">
+        <pre><code>Do not run this task in the live foreground chat session. 
+
+Follow these exact steps:
+1. Launch the command in the background using nohup:
+   nohup [YOUR_COMMAND_HERE] > /tmp/task_run.log 2>&1 &
+2. Print the process ID (PID) so I know it started.
+3. Exit immediately and give me a one-sentence confirmation that it is running in the background. Do not wait for it to finish.</code></pre>
+      </div>
+
+      <div class="prompt-box-header">
+        <span class="title">Copy prompt to check progress:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Prompt</button>
+      </div>
+      <div class="code-container">
+        <pre><code>Read the last 30 lines of /tmp/task_run.log and check if the process is still running with `ps aux | grep [YOUR_COMMAND_NAME]`. Give me a short bulleted status update.</code></pre>
+      </div>
+    </section>
+
+    <!-- Section 2 -->
+    <section class="section-card" id="section-2">
+      <div class="section-header">
+        <div class="section-title">2. Nightly Reboots Killing MCP Servers (Grok / ChatGPT OAuth)</div>
+        <div class="badge-tag">Persistent MCP</div>
+      </div>
+      <div class="problem-box">
+        <strong>The Problem:</strong> Zo reboots or cycles leases overnight. If your MCP server was started in a temporary terminal tab, it dies. Grok and ChatGPT lose their OAuth connection because in-memory tokens vanish and dynamic port URLs change.
+      </div>
+      <div class="micro-steps">
+        <div class="micro-steps-title">The 3 Rules for Immortal MCP Servers:</div>
+        <ol>
+          <li><strong>Rule 1 (Disk-Backed Tokens):</strong> The MCP server MUST save tokens to a SQLite DB or JSON file (e.g. <code>/home/workspace/.mcp/tokens.json</code>), never in RAM variables.</li>
+          <li><strong>Rule 2 (Supervisor Autostart):</strong> Put the MCP server into Zo's user supervisor (<code>/etc/zo/supervisord-user.conf</code>) with <code>autostart=true</code> so it boots on reboot.</li>
+          <li><strong>Rule 3 (Fixed Public URL):</strong> Route traffic through a Cloudflare Tunnel connected to your own domain so Grok/ChatGPT always connect to the exact same HTTPS URL.</li>
+        </ol>
+      </div>
+
+      <div class="prompt-box-header">
+        <span class="title">Copy prompt to register MCP server in Supervisor:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Prompt</button>
+      </div>
+      <div class="code-container">
+        <pre><code>I need my MCP server to automatically restart whenever this Zo Computer reboots.
+
+Follow these exact steps:
+1. Open /etc/zo/supervisord-user.conf.
+2. Add a new program block for my MCP server:
+   [program:my-mcp-server]
+   command=[COMMAND_TO_START_SERVER]
+   directory=[PATH_TO_SERVER_FOLDER]
+   autostart=true
+   autorestart=true
+   redirect_stderr=true
+   stdout_logfile=/tmp/mcp_server.log
+3. Run `supervisorctl -c /etc/zo/supervisord-user.conf update` to load and start it.
+4. Run `supervisorctl -c /etc/zo/supervisord-user.conf status` and show me that it is RUNNING.</code></pre>
+      </div>
+    </section>
+
+    <!-- Section 3 -->
+    <section class="section-card" id="section-3">
+      <div class="section-header">
+        <div class="section-title">3. Subagent Swarms ("Can't Fan-Out / Fan-In")</div>
+        <div class="badge-tag">Agent Swarms</div>
+      </div>
+      <div class="problem-box">
+        <strong>The Problem:</strong> People think Zo can't do multi-agent swarms because there is no "Subagent" button in the UI.
+      </div>
+      <div class="micro-steps">
+        <div class="micro-steps-title">How It Actually Works (The 4 Steps):</div>
+        <ol>
+          <li>Zo has 32GB of RAM and full Python <code>asyncio</code> installed.</li>
+          <li>Instead of waiting on single-turn chat steps, Zo writes an async script that fires 50 to 100+ parallel queries simultaneously.</li>
+          <li>The script collects all 100 responses into a single JSON file in seconds.</li>
+          <li>Zo reads that JSON file and synthesizes the final report in one turn.</li>
+        </ol>
+      </div>
+
+      <div class="prompt-box-header">
+        <span class="title">Copy prompt to run parallel swarm:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Prompt</button>
+      </div>
+      <div class="code-container">
+        <pre><code>I want to run an agent swarm of 50 parallel queries to analyze [TOPIC/DATA].
+
+Follow these exact steps:
+1. Write a Python script `/tmp/run_swarm.py` using `asyncio` and `httpx`.
+2. Generate 50 distinct task queries based on [TOPIC].
+3. Fan out all 50 queries concurrently using `asyncio.gather()`.
+4. Capture every response and error, and dump the entire list into `/tmp/swarm_data.json`.
+5. Run the script.
+6. Once `/tmp/swarm_data.json` is generated, read it and give me a synthesized summary of the findings.</code></pre>
+      </div>
+    </section>
+
+    <!-- Section 4 -->
+    <section class="section-card" id="section-4">
+      <div class="section-header">
+        <div class="section-title">4. Docker Alternative & Client-Dedicated Sandboxes</div>
+        <div class="badge-tag">Security & Multi-Tenancy</div>
+      </div>
+      <div class="problem-box">
+        <strong>The Problem:</strong> Zo runs in gVisor on Modal. gVisor blocks root mount namespaces (<code>CLONE_NEWNS</code>), so <code>dockerd</code> cannot start containers. How do you isolate a client's apps and agents without Docker?
+      </div>
+      <div class="micro-steps">
+        <div class="micro-steps-title">The One-Way Linux Sandbox Architecture:</div>
+        <ol>
+          <li>Lock down <code>/root</code> permissions to <code>700</code> so only the admin can enter.</li>
+          <li>Create a dedicated Linux user (e.g. <code>client1</code>) with their own home folder (<code>/home/client1</code>).</li>
+          <li>Use Linux <strong>cgroups v1</strong> to hard-cap their CPU to 2 cores and RAM to 3GB.</li>
+          <li>Run their apps and agents under that user. They cannot touch your root workspace, but you (as root) have full access to inspect and repair their environment anytime.</li>
+        </ol>
+      </div>
+
+      <div class="prompt-box-header">
+        <span class="title">Copy prompt to create client sandbox:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Prompt</button>
+      </div>
+      <div class="code-container">
+        <pre><code>Please set up an isolated, resource-throttled Linux client sandbox for `client1` on this machine.
+
+Follow these exact steps:
+1. Lock root so non-root users cannot see admin files:
+   chmod 700 /root
+2. Create the client user and dedicated directories:
+   useradd -m -s /bin/bash client1
+   chmod 750 /home/client1
+   mkdir -p /home/client1/apps /home/client1/data
+   chown -R client1:client1 /home/client1
+3. Set up cgroups v1 resource throttling to cap client1 to 2 CPU cores and 3 GB RAM:
+   mkdir -p /sys/fs/cgroup/memory/client1
+   echo 3221225472 > /sys/fs/cgroup/memory/client1/memory.limit_in_bytes
+   mkdir -p /sys/fs/cgroup/cpu/client1
+   echo 100000 > /sys/fs/cgroup/cpu/client1/cpu.cfs_period_us
+   echo 200000 > /sys/fs/cgroup/cpu/client1/cpu.cfs_quota_us
+4. Create a launcher script `/usr/local/bin/run-client1.sh` that assigns the shell PID to the cgroups and runs commands via `su - client1 -c "$*"`.
+5. Test that client1 gets "Permission denied" when trying to list `/root`.</code></pre>
+      </div>
+    </section>
+
+    <!-- Section 5 -->
+    <section class="section-card" id="section-5">
+      <div class="section-header">
+        <div class="section-title">5. Codex CLI & Bubblewrap (bwrap) Crashes</div>
+        <div class="badge-tag">CLI Sandboxing</div>
+      </div>
+      <div class="problem-box">
+        <strong>The Problem:</strong> When running OpenAI Codex or Claude Code CLI, commands crash with <code>bwrap: Failed to make / slave: Operation not permitted</code>.
+      </div>
+      <div class="callout callout-info">
+        <strong>Why this happens:</strong> Codex wraps every tool call inside Bubblewrap for safety. Because Zo is already running inside Modal's gVisor container, nested sandboxing is forbidden. Tell Codex to run directly on the host shell.
+      </div>
+
+      <div class="prompt-box-header">
+        <span class="title">How to execute commands without Bubblewrap:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Command</button>
+      </div>
+      <div class="code-container">
+        <pre><code># Codex CLI (current flags — there is no --no-sandbox):
+codex --dangerously-bypass-approvals-and-sandbox -p "Your coding prompt here"
+# or:  codex -s danger-full-access -p "Your coding prompt here"
+
+# Claude Code CLI:
+claude --dangerously-skip-permissions</code></pre>
+      </div>
+    </section>
+
+    <!-- Section 6 -->
+    <section class="section-card" id="section-6">
+      <div class="section-header">
+        <div class="section-title">6. Shutting Off Zo's Native Memory (Supermemory)</div>
+        <div class="badge-tag">Context Hygiene</div>
+      </div>
+      <div class="problem-box">
+        <strong>The Problem:</strong> Zo has two layers of memory: active conversation context and background-injected Supermemory. Zo does not provide an "Off" switch in the UI, causing stale bug fixes or old conversations to pollute new chats.
+      </div>
+      <div class="micro-steps">
+        <div class="micro-steps-title">How to Completely Override It:</div>
+        <ol>
+          <li>LLMs prioritize explicit system/persona instructions over background injected context.</li>
+          <li>Put an explicit instruction at the top of your Persona or System Prompt telling it to ignore native memory.</li>
+          <li>Instruct it to keep state only in local files (like <code>MEMORY.md</code> or local SQLite).</li>
+          <li><em>Alternative:</em> If you route through an LLM proxy like OmniRoute, inject this system prompt at the proxy layer so it applies across all chats automatically.</li>
+        </ol>
+      </div>
+
+      <div class="prompt-box-header">
+        <span class="title">Paste this into your Zo Persona / System Instructions:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Persona Block</button>
+      </div>
+      <div class="code-container">
+        <pre><code>## Memory Directives
+- Completely ignore all implicit, native, or background-injected cross-session memory (Supermemory).
+- Do not assume prior context, past project state, or implicit preferences unless explicitly provided in the current prompt or found in local workspace files.
+- Treat every new session as a clean, isolated state.
+- All persistent memory and project state MUST be read from and written directly to local files in the workspace (e.g., `MEMORY.md` or a local SQLite database).</code></pre>
+      </div>
+    </section>
+
+    <!-- Section 7 -->
+    <section class="section-card" id="section-7">
+      <div class="section-header">
+        <div class="section-title">7. High Disk Writes Triggering Mid-Response Reboots</div>
+        <div class="badge-tag">I/O Performance</div>
+      </div>
+      <div class="problem-box">
+        <strong>The Problem:</strong> Modal automatically snapshots the persistent disk (<code>/root</code> and <code>/home/workspace</code>). When you run giant <code>npm install</code> runs, compile wheels, or extract multi-gigabyte zips, the disk churn locks up the snapshot engine and reboots your sandbox mid-turn.
+      </div>
+      <div class="callout callout-success">
+        <strong>The Golden Rule:</strong> On Zo, <code>/tmp</code> is the same persistent 9p disk as <code>/</code> — it is <em>not</em> RAM. The real RAM disk is <code>/dev/shm</code> (tmpfs). Put caches and scratch builds there so they do not churn the snapshot layer.
+      </div>
+
+      <div class="prompt-box-header">
+        <span class="title">Copy prompt before heavy builds:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Setup Prompt</button>
+      </div>
+      <div class="code-container">
+        <pre><code>Before building or installing anything, redirect caches and scratch to the RAM disk (/dev/shm), not /tmp:
+export TMPDIR=/dev/shm
+export PIP_CACHE_DIR=/dev/shm/pip-cache
+export npm_config_cache=/dev/shm/npm-cache
+mkdir -p /dev/shm/build
+
+Do all cloning, compiling, or extracting in `/dev/shm/build` first.
+Once finished, copy ONLY the final compiled artifact or binary to `/home/workspace`.</code></pre>
+      </div>
+    </section>
+
+    <!-- Section 8 -->
+    <section class="section-card" id="section-8">
+      <div class="section-header">
+        <div class="section-title">8. Cloudflare Limits, Custom Tunnels & Allowing AI Crawlers (is-agentic.com)</div>
+        <div class="badge-tag">Edge Networking & SEO</div>
+      </div>
+      <div class="problem-box">
+        <strong>The Problem:</strong> Zo's native hosting routes traffic through Zo's enterprise Cloudflare account, where "Block AI Scrapers and Crawlers" and Bot Fight Mode are locked ON. Audits like <code>is-agentic.com</code> get 403 Forbidden errors. Cloudflare's own Free/Pro limits still apply on a tunnel you own: <strong>100 MB request body</strong> (413) and a default <strong>~125s origin read timeout</strong> (524).
+      </div>
+
+      <div class="micro-steps">
+        <div class="micro-steps-title">The 3-Step Setup (Costs Nothing):</div>
+        <ol>
+          <li>Create a free Cloudflare account at <code>dash.cloudflare.com</code> and add your domain.</li>
+          <li>Create an API Token with full Zone/DNS/Tunnel permissions.</li>
+          <li>Give Zo the API token and the prompt below. Zo will automatically install <code>cloudflared</code>, configure the tunnel, map the DNS, and supervisorize it.</li>
+        </ol>
+      </div>
+
+      <div class="prompt-box-header">
+        <span class="title">Copy prompt to set up Cloudflare Tunnel:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Tunnel Prompt</button>
+      </div>
+      <div class="code-container">
+        <pre><code>I want to make my backend running on port [PORT] publicly accessible on my domain [SUBDOMAIN.YOURDOMAIN.COM] using a Cloudflare Tunnel so we completely bypass Zo's Cloudflare proxy and allow AI agent crawlers (is-agentic.com compliance).
+
+Here is my Cloudflare API Token: [PASTE_YOUR_CF_API_TOKEN_HERE]
+
+Follow these exact steps:
+1. Install `cloudflared` on this machine if not present.
+2. Authenticate using the token and create a named tunnel (e.g. `zo-tunnel`).
+3. Route DNS for `[SUBDOMAIN.YOURDOMAIN.COM]` to this tunnel.
+4. Forward ingress traffic to `http://localhost:[PORT]`.
+5. Add `cloudflared` to /etc/zo/supervisord-user.conf so it automatically restarts on reboots.
+6. Verify the tunnel is active and test that the URL returns 200 OK.</code></pre>
+      </div>
+
+      <div class="micro-steps">
+        <div class="micro-steps-title">How to Configure Cloudflare WAF to Maximize AI Agent Crawling & SEO:</div>
+        <ol>
+          <li><strong>Turn Off AI Bot Blocking:</strong> In Cloudflare, go to <strong>Security &rarr; Bots</strong> and toggle <strong>"Block AI Scrapers and Crawlers"</strong> to <strong>Off</strong>.</li>
+          <li><strong>Disable Bot Fight Mode:</strong> Turn off Bot Fight Mode (or set Security Level to <em>Essentially Off</em>) so headless AI scanners don't get challenged by Turnstile.</li>
+          <li><strong>Disable Browser Integrity Check (BIC):</strong> In <strong>Security &rarr; Settings</strong>, turn BIC off so CLI agents and curl-like scrapers aren't flagged.</li>
+          <li><strong>Create a WAF Skip Rule:</strong> Go to <strong>Security &rarr; WAF &rarr; Custom Rules &rarr; Create Rule</strong>:
+            <pre class="standalone" style="margin: 0.7rem 0;"><code>(http.user_agent contains "is-agentic") or
+(http.user_agent contains "GPTBot") or
+(http.user_agent contains "ClaudeBot") or
+(http.user_agent contains "PerplexityBot") or
+(http.request.uri.path in {"/robots.txt" "/llms.txt" "/llms-full.txt"})</code></pre>
+            Set Action to: <strong>Skip &rarr; All remaining custom rules, WAF Managed Rules, and Super Bot Fight Mode</strong>.
+          </li>
+        </ol>
+      </div>
+      <div class="callout callout-info">
+        <strong>💡 Static Sites:</strong> If your website doesn't have a backend and is completely static (HTML/JS/CSS), don't even use a tunnel. Deploy it directly to <strong>Cloudflare Pages</strong>. It's 100% free, has unlimited bandwidth, and has zero bot-blocking by default.
+      </div>
+    </section>
+
+    <!-- Section 9 -->
+    <section class="section-card" id="section-9">
+      <div class="section-header">
+        <div class="section-title">9. Zo Browser Limitations & Localhost Access</div>
+        <div class="badge-tag">Browser Automation</div>
+      </div>
+      <div class="problem-box">
+        <strong>The Problem:</strong> Zo Browser runs in a separate remote sandbox that cannot connect to <code>localhost</code>, idle times out after 5 minutes, and cannot handle 2FA/CAPTCHA challenges.
+      </div>
+      <div class="micro-steps">
+        <div class="micro-steps-title">The Solution:</div>
+        <ol>
+          <li><strong>For testing local apps:</strong> Run Playwright or Scrapling directly inside the Zo terminal. Because it runs on the Linux host, it has direct access to <code>http://localhost:[PORT]</code>.</li>
+          <li><strong>For complex scraping & CAPTCHA takeover:</strong> Connect your script via CDP (Chrome DevTools Protocol) to external browser services like Steel.dev or Browserbase for persistent profiles and live human takeover.</li>
+        </ol>
+      </div>
+
+      <div class="prompt-box-header">
+        <span class="title">Copy prompt for localhost app testing:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Prompt</button>
+      </div>
+      <div class="code-container">
+        <pre><code>Write a python script using Playwright to visit `http://localhost:[PORT]` locally on this machine, take a screenshot of the homepage, save it to `/tmp/app_test.png`, and check if there are any console errors. Run the script and show me the output.</code></pre>
+      </div>
+    </section>
+
+    <section class="section-card" id="section-extras">
+      <div class="section-header">
+        <div class="section-title">Also verified on a live Zo box</div>
+        <div class="badge-tag">Don't trust nproc</div>
+      </div>
+      <div class="problem-box">
+        <strong>nproc lies under gVisor.</strong> It often prints <code>1</code> even when you paid for 4 vCPUs. RAM reporting is honest (<code>free -h</code> showed 32 GiB). Count CPUs from <code>/proc/cpuinfo</code> instead of <code>nproc</code>.
+      </div>
+      <div class="prompt-box-header">
+        <span class="title">Copy prompt to check real CPU/RAM:</span>
+        <button class="btn-copy" onclick="copySnippet(this)">Copy Prompt</button>
+      </div>
+      <div class="code-container">
+        <pre><code>Do not trust nproc. Print all of these and stop:
+1. nproc
+2. grep -c '^processor' /proc/cpuinfo
+3. free -h
+4. findmnt -T /tmp
+5. df -hT /dev/shm</code></pre>
+      </div>
+    </section>
+
+    <!-- Clean Anonymous Feedback Note -->
+    <div class="feedback-note">
+      <h3>Have a question, edge case, or alternate workaround?</h3>
+      <p>Drop your findings or feedback directly in the reply.</p>
+    </div>
+
+  </div>
+
+  <footer>
+    The Zo Computer Playbook &bull; Published via <a href="https://zo.pub/sillyhippy">zo.pub</a> &bull; Created for the Zo Community
+  </footer>
+
+  <script>
+    function copySnippet(btn) {
+      const header = btn.closest('.prompt-box-header');
+      const block = header && header.nextElementSibling;
+      const pre = block && block.querySelector('pre');
+      if (!pre) return;
+      const code = pre.innerText;
+      navigator.clipboard.writeText(code).then(() => {
+        const originalText = btn.innerText;
+        btn.textContent = '✓ Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>
