@@ -157,7 +157,7 @@ def create_snapshot(label: str = "", scope: str = "config", custom_paths: list =
     manifest = {
         "id": snap_id,
         "label": label or f"Snapshot {ts.strftime('%Y-%m-%d %H:%M:%S')}",
-        "scope": scope,
+        "scope": "custom" if custom_paths else scope,
         "roots": targets,
         "created_at": ts.isoformat(),
         "files": {},
@@ -242,12 +242,12 @@ def create_snapshot(label: str = "", scope: str = "config", custom_paths: list =
             conn.execute("""
                 INSERT INTO snapshots (id, label, scope, created_at, file_count, total_bytes, metadata_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (snap_id, manifest["label"], scope, ts.isoformat(), file_count, total_bytes, json.dumps(manifest)))
+            """, (snap_id, manifest["label"], manifest["scope"], ts.isoformat(), file_count, total_bytes, json.dumps(manifest)))
 
         return {
             "id": snap_id,
             "label": manifest["label"],
-            "scope": scope,
+            "scope": manifest["scope"],
             "roots": targets,
             "created_at": ts.isoformat(),
             "file_count": file_count,
@@ -287,14 +287,12 @@ def delete_snapshot(snap_id: str, root_path: Path = SNAPSHOT_ROOT) -> bool:
         return False
     init_db(root_path)
     
-    # Check record exists first
     with get_db(root_path) as conn:
         cur = conn.execute("SELECT id FROM snapshots WHERE id = ?", (snap_id,))
         if not cur.fetchone():
             return False
             
     snap_dir = (root_path / "data") / snap_id
-    # Enforce path containment
     if snap_dir.resolve().parent != (root_path / "data").resolve():
         return False
         
@@ -331,7 +329,6 @@ def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: i
         m2 = s2.get("manifest", {}).get("files", {})
         snap_dir_2 = (root_path / "data") / snap_id_2
     else:
-        # Full live rescan of the snapshot's recorded roots to detect NEW additions
         live_scanned, _ = scan_live_files(roots1)
         m2 = live_scanned
 
@@ -403,7 +400,6 @@ def restore_snapshot(snap_id: str, dry_run: bool = False, target_file: str = Non
     files = manifest.get("files", {})
     roots = manifest.get("roots", SCOPE_PATHS.get(s.get("scope"), SCOPE_PATHS["config"]))
     
-    # 1. Verification pass: check all stored files match their manifest SHA256
     integrity_errors = []
     for fpath_str, meta in files.items():
         src_disk = snap_dir / Path(fpath_str).relative_to("/")
@@ -415,7 +411,6 @@ def restore_snapshot(snap_id: str, dry_run: bool = False, target_file: str = Non
     if integrity_errors:
         return {"error": "Snapshot integrity check failed", "details": integrity_errors}
 
-    # 2. Auto-checkpoint: capture exact roots before restoring
     safety_id = None
     if not dry_run:
         safety_snap = create_snapshot(
@@ -440,12 +435,10 @@ def restore_snapshot(snap_id: str, dry_run: bool = False, target_file: str = Non
 
         if not dry_run:
             dest_path.parent.mkdir(parents=True, exist_ok=True)
-            # Stage file beside destination for atomic rename replacement
             temp_target = dest_path.with_name(f".tmp_rst_{os.getpid()}_{dest_path.name}")
             shutil.copy2(src_disk, temp_target)
             staged_transfers.append((temp_target, dest_path))
 
-    # Apply staged replacements atomically
     if not dry_run:
         for temp_target, dest_path in staged_transfers:
             os.replace(temp_target, dest_path)
@@ -457,8 +450,6 @@ def restore_snapshot(snap_id: str, dry_run: bool = False, target_file: str = Non
         "restored_count": len(actions),
         "actions": actions
     }
-
-# ================= HTTP / MCP Server =================
 
 class SnapshotHandler(BaseHTTPRequestHandler):
     root_path = SNAPSHOT_ROOT
@@ -554,7 +545,6 @@ class SnapshotHandler(BaseHTTPRequestHandler):
                 }
             })
         elif method == "notifications/initialized":
-            # Standard client notification response
             self.send_json({"jsonrpc": "2.0", "result": {}})
         elif method == "tools/list":
             tools = [
@@ -570,7 +560,8 @@ class SnapshotHandler(BaseHTTPRequestHandler):
                         "type": "object",
                         "properties": {
                             "label": {"type": "string", "description": "Human-readable label"},
-                            "scope": {"type": "string", "enum": ["config", "workspace", "hermes", "all"], "default": "config"}
+                            "scope": {"type": "string", "enum": ["config", "workspace", "hermes", "all", "custom"], "default": "config"},
+                            "paths": {"type": "array", "items": {"type": "string"}, "description": "Custom paths list"}
                         }
                     }
                 },
@@ -608,7 +599,7 @@ class SnapshotHandler(BaseHTTPRequestHandler):
             if tool_name == "snapshot_list":
                 res = list_snapshots(self.root_path)
             elif tool_name == "snapshot_create":
-                res = create_snapshot(label=args.get("label", ""), scope=args.get("scope", "config"), root_path=self.root_path)
+                res = create_snapshot(label=args.get("label", ""), scope=args.get("scope", "config"), custom_paths=args.get("paths"), root_path=self.root_path)
             elif tool_name == "snapshot_diff":
                 res = diff_snapshots(args.get("from_id"), args.get("to_id", "current"), root_path=self.root_path)
             elif tool_name == "snapshot_restore":
@@ -645,7 +636,8 @@ def main():
 
     p_create = subparsers.add_parser("create", help="Create a snapshot")
     p_create.add_argument("label", nargs="?", default="", help="Snapshot label")
-    p_create.add_argument("--scope", default="config", choices=["config", "workspace", "hermes", "all"], help="Scope to snapshot")
+    p_create.add_argument("--scope", default="config", choices=["config", "workspace", "hermes", "all", "custom"], help="Scope to snapshot")
+    p_create.add_argument("--paths", nargs="+", help="Specific custom paths to snapshot")
     p_create.add_argument("--json", action="store_true", help="Output JSON")
 
     p_list = subparsers.add_parser("list", help="List snapshots")
@@ -689,7 +681,7 @@ def main():
                     print(f"{s['id']:<34} {dt:<20} {s['scope']:<10} {s['file_count']:<8} {s['label']}")
 
     elif args.command == "create":
-        res = create_snapshot(label=args.label, scope=args.scope)
+        res = create_snapshot(label=args.label, scope=args.scope, custom_paths=args.paths)
         if args.json:
             print(json.dumps(res, indent=2))
         else:
