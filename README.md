@@ -42,5 +42,19 @@ curl -sL https://raw.githubusercontent.com/SillyHippy/zo-skills/main/install.sh 
 
 ---
 
+## Fork and pull requests
+
+This repo is public. Anyone with a GitHub account can fork it and open a PR against `main`. They cannot push directly here — you review and merge.
+
+1. Fork: https://github.com/SillyHippy/zo-skills/fork
+2. Clone your fork, branch off `main`, push, then Compare & pull request.
+
+Details: [CONTRIBUTING.md](CONTRIBUTING.md)
+
+Issues: https://github.com/SillyHippy/zo-skills/issues
+
+---
+
 ## License
-MIT
+
+[MIT](LICENSE)
