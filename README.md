@@ -32,6 +32,15 @@ Maintained by **[SillyHippy](https://github.com/SillyHippy)**.
 
 ---
 
+## Community credit: `zo-mitigations` by Provisional9448
+
+- **Author:** [Provisional9448](https://github.com/Provisional9448) — repo: [Provisional9448/zo-mitigations](https://github.com/Provisional9448/zo-mitigations)
+- **What it is:** stdlib-only toolkit for Zo turn limits, random restarts, and task recovery (turn budget, durable checkpoints, restart monitor, local-inbox handoff, optional ACP completion adapter).
+- **Validated here:** 33/33 offline tests pass; budget/monitor/checkpoint/recover/local-inbox verified on Zo 2026-09-12. Live ACP rewiring intentionally not done.
+- **Install (their repo, not vendored here):** `git clone https://github.com/Provisional9448/zo-mitigations.git` then follow its `docs/INSTALL_WITH_ZO.md` (preview install first, state dir `700`, monitor as internal service with no public endpoint).
+
+---
+
 ## 1-Line Installer for Zo Computer
 
 To install the entire suite onto any Zo Computer / Linux instance:
