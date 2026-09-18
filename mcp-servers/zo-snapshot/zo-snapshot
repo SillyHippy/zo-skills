@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-zo-snapshot v3.1: Fast Content-Addressable (CAS) + Stat-Cached Full VPS Snapshot Engine.
+zo-snapshot v3.2: Fast Content-Addressable (CAS) + Stat-Cached Full VPS Snapshot Engine.
 - Live files are NEVER hardlinked (live in-place edits never mutate snapshots).
 - Snapshot files link to immutable objects in the CAS pool (/root/.zo_snapshots/objects/).
 - Mtime + Size stat-caching avoids re-reading/re-hashing untouched files in huge projects.
@@ -338,6 +338,134 @@ def delete_snapshot(snap_id: str, root_path: Path = SNAPSHOT_ROOT) -> bool:
         conn.execute("DELETE FROM snapshots WHERE id = ?", (snap_id,))
     return True
 
+
+def load_ui_html() -> bytes:
+    for candidate in (
+        Path("/root/snapshot_ui.html"),
+        Path("/home/workspace/zo-snapshot-release/snapshot_ui.html"),
+        Path(__file__).resolve().parent / "snapshot_ui.html",
+    ):
+        if candidate.is_file():
+            return candidate.read_bytes()
+    return (
+        b"<!DOCTYPE html><html><body><p>snapshot_ui.html missing. "
+        b"Place it next to zo-snapshot or at /root/snapshot_ui.html</p></body></html>"
+    )
+
+
+SQLITE_HEADER = b"SQLite format 3\x00"
+SQLITE_SKIP_TABLES = {
+    "sqlite_sequence", "sqlite_stat1", "sqlite_stat2", "sqlite_stat3", "sqlite_stat4",
+    "_litestream_lock", "_litestream_seq",
+}
+SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+def is_sqlite_file(path: Path) -> bool:
+    name = path.name.lower()
+    if name.endswith(SQLITE_SIDECAR_SUFFIXES):
+        return False
+    try:
+        with open(path, "rb") as f:
+            return f.read(16) == SQLITE_HEADER
+    except Exception:
+        return False
+
+
+def _sql_cell(val, max_len: int = 240) -> str:
+    if val is None:
+        return "NULL"
+    if isinstance(val, bytes):
+        return f"[blob {len(val)} bytes]"
+    s = str(val).replace("\r", "").replace("\n", "\\n").replace("\t", " ")
+    if len(s) > max_len:
+        s = s[:max_len] + "…"
+    return s
+
+
+def sqlite_dump_lines(path: Path, max_rows_per_table: int = 8000) -> list:
+    lines = []
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        tables = [
+            r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        ]
+        tables = [t for t in tables if t not in SQLITE_SKIP_TABLES]
+
+        def rank(t: str) -> int:
+            tl = t.lower()
+            if tl.startswith("serve"):
+                return 0
+            if tl.startswith("client"):
+                return 1
+            if t.startswith("_"):
+                return 9
+            return 5
+
+        tables.sort(key=lambda t: (rank(t), t.lower()))
+        for t in tables:
+            ident = t.replace('"', '""')
+            try:
+                cols_info = list(con.execute(f'PRAGMA table_info("{ident}")'))
+                n = con.execute(f'SELECT COUNT(*) FROM "{ident}"').fetchone()[0]
+            except Exception as e:
+                lines.append(f"# {t} ERROR {e}\n")
+                continue
+            col_names = [c[1] for c in cols_info]
+            lines.append(f"# {t} ({n} rows)\n")
+            order = "id" if "id" in col_names else (col_names[0] if col_names else "rowid")
+            order_ident = order.replace('"', '""')
+            try:
+                rows = con.execute(
+                    f'SELECT * FROM "{ident}" ORDER BY "{order_ident}" LIMIT {int(max_rows_per_table)}'
+                ).fetchall()
+            except Exception:
+                rows = con.execute(
+                    f'SELECT * FROM "{ident}" LIMIT {int(max_rows_per_table)}'
+                ).fetchall()
+            for row in rows:
+                parts = []
+                for i, k in enumerate(col_names):
+                    v = row[i]
+                    parts.append(f"{k}={_sql_cell(v)}")
+                lines.append(f"{t}\t" + " | ".join(parts) + "\n")
+            if n > max_rows_per_table:
+                lines.append(f"# {t} truncated after {max_rows_per_table} of {n} rows\n")
+    finally:
+        con.close()
+    if not lines:
+        lines = ["# empty sqlite database\n"]
+    return lines
+
+
+def file_to_diff_lines(path: Path) -> list:
+    if not path.exists() or not path.is_file():
+        return []
+    name = path.name.lower()
+    if name.endswith(SQLITE_SIDECAR_SUFFIXES):
+        try:
+            st = path.stat()
+            return [f"[SQLite sidecar {path.name} size={st.st_size}]\n"]
+        except Exception as ex:
+            return [f"[SQLite sidecar unreadable: {ex}]\n"]
+    if is_sqlite_file(path):
+        try:
+            return sqlite_dump_lines(path)
+        except Exception as ex:
+            return [f"[SQLite unreadable: {ex}]\n"]
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8192)
+        if b"\x00" in head:
+            st = path.stat()
+            return [f"[binary file size={st.st_size} sha256={hash_file(path)[:16]}]\n"]
+        return path.read_text(errors="replace").splitlines(keepends=True)
+    except Exception as ex:
+        return [f"[unreadable: {ex}]\n"]
+
+
 def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: int = 500, root_path: Path = SNAPSHOT_ROOT) -> dict:
     if not validate_id(snap_id_1):
         return {"error": f"Invalid source snapshot ID: {snap_id_1}"}
@@ -387,7 +515,7 @@ def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: i
             else:
                 f2_disk = snap_dir_2 / Path(clean_path)
             try:
-                t2 = f2_disk.read_text(errors="replace").splitlines(keepends=True)
+                t2 = file_to_diff_lines(f2_disk)
                 udiff = list(difflib.unified_diff(
                     [], t2,
                     fromfile="/dev/null",
@@ -395,7 +523,8 @@ def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: i
                     n=3
                 ))
                 if udiff:
-                    diffs[fpath] = "".join(udiff[:max_diff_lines])
+                    cap = 20000 if is_sqlite_file(f2_disk) else max_diff_lines
+                    diffs[fpath] = "".join(udiff[:cap])
             except Exception as ex:
                 diffs[fpath] = f"[Binary or unreadable file: {ex}]"
 
@@ -404,7 +533,7 @@ def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: i
             deleted.append(fpath)
             f1_disk = snap_dir_1 / Path(clean_path)
             try:
-                t1 = f1_disk.read_text(errors="replace").splitlines(keepends=True)
+                t1 = file_to_diff_lines(f1_disk)
                 udiff = list(difflib.unified_diff(
                     t1, [],
                     fromfile=f"a/{clean_path}",
@@ -412,7 +541,8 @@ def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: i
                     n=3
                 ))
                 if udiff:
-                    diffs[fpath] = "".join(udiff[:max_diff_lines])
+                    cap = 20000 if is_sqlite_file(f1_disk) else max_diff_lines
+                    diffs[fpath] = "".join(udiff[:cap])
             except Exception as ex:
                 diffs[fpath] = f"[Binary or unreadable file: {ex}]"
 
@@ -427,8 +557,8 @@ def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: i
                     f2_disk = snap_dir_2 / Path(clean_path)
 
                 try:
-                    t1 = f1_disk.read_text(errors="replace").splitlines(keepends=True)
-                    t2 = f2_disk.read_text(errors="replace").splitlines(keepends=True)
+                    t1 = file_to_diff_lines(f1_disk)
+                    t2 = file_to_diff_lines(f2_disk)
                     udiff = list(difflib.unified_diff(
                         t1, t2,
                         fromfile=f"a/{clean_path}",
@@ -436,7 +566,8 @@ def diff_snapshots(snap_id_1: str, snap_id_2: str = "current", max_diff_lines: i
                         n=3
                     ))
                     if udiff:
-                        diffs[fpath] = "".join(udiff[:max_diff_lines])
+                        cap = 20000 if (is_sqlite_file(f1_disk) or is_sqlite_file(f2_disk)) else max_diff_lines
+                        diffs[fpath] = "".join(udiff[:cap])
                 except Exception as ex:
                     diffs[fpath] = f"[Binary or unreadable file diff: {ex}]"
             else:
@@ -553,7 +684,7 @@ class SnapshotHandler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
 
         if parsed.path in ("/", "/ui", "/snapshot", "/snapshot/"):
-            ui_html = Path("/root/snapshot_ui.html").read_bytes()
+            ui_html = load_ui_html()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(ui_html)))
@@ -577,8 +708,8 @@ class SnapshotHandler(BaseHTTPRequestHandler):
                 self.send_json(snap)
             else:
                 self.send_json({"error": "Not found"}, 404)
-        elif parsed.path == "/health":
-            self.send_json({"status": "ok", "service": "zo-snapshot", "version": "3.1.0"})
+        elif parsed.path in ("/health", "/snapshot/health"):
+            self.send_json({"status": "ok", "service": "zo-snapshot", "version": "3.2.0"})
         else:
             self.send_json({"error": "Not Found"}, 404)
 
@@ -625,7 +756,7 @@ class SnapshotHandler(BaseHTTPRequestHandler):
                 "id": msg_id,
                 "result": {
                     "protocolVersion": "2024-11-05",
-                    "serverInfo": {"name": "zo-snapshot", "version": "3.1.0"},
+                    "serverInfo": {"name": "zo-snapshot", "version": "3.2.0"},
                     "capabilities": {"tools": {}}
                 }
             })
@@ -709,7 +840,7 @@ def run_server(port: int = 3090, root_path: Path = SNAPSHOT_ROOT):
     init_db(root_path)
     SnapshotHandler.root_path = root_path
     server = HTTPServer(("127.0.0.1", port), SnapshotHandler)
-    print(f"zo-snapshot v3.1 running on http://127.0.0.1:{port} (MCP at /mcp)")
+    print(f"zo-snapshot v3.2 running on http://127.0.0.1:{port} (MCP at /mcp)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

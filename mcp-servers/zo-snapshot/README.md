@@ -12,6 +12,7 @@ Zero external dependencies — pure Python 3.12 stdlib.
 
 - **Hardlink Copy-on-Write (COW):** Creates point-in-time snapshots in `< 100ms` with near-zero disk usage.
 - **Word-for-Word Diffs:** Exact unified diffs (`+` added, `-` deleted, `~` modified) matching standard `git diff`.
+- **SQLite row diffs (v3.2):** `.db` files are dumped as one line per row (`table  col=val | …`) before the unified diff, so ServeTracker `serve_attempts` show as readable `+/-` lines instead of UTF-8 garbage. WAL/SHM sidecars stay size-only. Other binary files (PDF, images) get a size/hash stub, not a byte dump.
 - **Automatic Zo Renewal Integration:** Hooks into Zo Computer's native `renewal_handoff.py` lifecycle (`/home/workspace/.zo/renewal-hooks.d/`) to automatically take a snapshot every time Zo renews or prepares a VM snapshot.
 - **Dual Access Interface:**
   - **CLI:** Fast, human-readable terminal commands with `--json` support.
@@ -53,8 +54,11 @@ supervisorctl -c /etc/zo/supervisord-user.conf update
 
 ### 1. Create a Snapshot
 ```bash
-# Default config scope (/root/.hermes, /etc/zo, .env, .zo_secrets)
+# Default is full VPS (workspace + /root + /etc/zo + /tmp)
 zo-snapshot create "Before testing model switch"
+
+# Config-only (/root/.hermes, /etc/zo, .env, .zo_secrets)
+zo-snapshot create "Before testing model switch" --scope config
 
 # Full workspace scope
 zo-snapshot create "Before big refactor" --scope workspace
@@ -119,8 +123,10 @@ When running as a daemon on `:3090`, `zo-snapshot` provides native JSON-RPC 2.0 
 
 - `snapshot_list`: List all snapshots with metadata.
 - `snapshot_create`: Create a snapshot with custom label and scope.
-- `snapshot_diff`: Generate structured and unified diffs.
+- `snapshot_diff`: Generate structured and unified diffs (SQLite `.db` files are row-text, not bytes).
 - `snapshot_restore`: Revert files to a previous snapshot state.
+
+REST also serves `GET /health` and `GET /snapshot/health` (needed when the hub proxies the inspector under `/snapshot/`).
 
 ---
 
